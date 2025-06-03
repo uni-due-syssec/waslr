@@ -82,17 +82,14 @@ namespace waslr {
     LLVMContext &Ctx = M.getContext();
     Type *i32Ty = Type::getInt32Ty(Ctx);
 
-    // Declare __stack_pointer as external to be resolved later (or get it, but it should never be available at this point)
-    /*GlobalVariable *stackPtr = M.getGlobalVariable("__stack_pointer");
-    if (!stackPtr) {
-        stackPtr = new GlobalVariable(M, i32Ty, false, GlobalValue::ExternalLinkage, nullptr, "__stack_pointer");
-    }*/
+    // Declare __stack_pointer as external to be resolved later
     GlobalVariable *stackPtr = new GlobalVariable(M, i32Ty, false, GlobalValue::ExternalLinkage, nullptr, "__stack_pointer");
     stackPtr->setDSOLocal(false);
 
     FunctionType *initFuncTy = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
     // WeakODRLinkage: To merge duplicate functions at link time
-    Function *initFunc = Function::Create(initFuncTy, GlobalValue::WeakODRLinkage, "__init_stack_pointer", &M);
+    Function *initFunc = Function::Create(initFuncTy, GlobalValue::WeakODRLinkage, "init_stack_pointer", &M);
+    initFunc->addFnAttr("wasm-export-name", "init_stack_pointer");
 
     BasicBlock *entryBB = BasicBlock::Create(Ctx, "entry", initFunc);
     IRBuilder<> builder(entryBB);
@@ -105,28 +102,27 @@ namespace waslr {
         consoleFunc = Function::Create(consoleFuncTy, GlobalValue::ExternalLinkage, "console", &M);
     }
 
-    // Create the debug string
-    Constant *debugStr = builder.CreateGlobalStringPtr("Constructor called - setting stack to 69420");
-
-    // Call console function
+    // debug
+    Constant *debugStr = builder.CreateGlobalStringPtr("Setting stack pointer to 69420");
     builder.CreateCall(consoleFunc, {debugStr});
 
     // Randomize stack pointer value (example constant here)
-    /*uint32_t randOffset = 69420; 
+    uint32_t randOffset = 69420; 
     Constant *randVal = ConstantInt::get(i32Ty, randOffset);
     builder.CreateStore(randVal, stackPtr);
-    builder.CreateRetVoid();*/
+    builder.CreateRetVoid();
 
-    // Use inline assembly to set the stack pointer because otherwise it does not properly use the global
-    std::string asmStr = "i32.const 69420\nglobal.set __stack_pointer";
+    // Alternative: Use inline assembly to set the stack pointer
+    /*std::string asmStr = "i32.const 69420\nglobal.set __stack_pointer";
     FunctionType *asmFuncTy = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
     InlineAsm *inlineAsm = InlineAsm::get(asmFuncTy, asmStr, "", true, false);
     builder.CreateCall(inlineAsm);
 
-    builder.CreateRetVoid();
+    builder.CreateRetVoid();*/
 
     // LLVM Global Constructors are added to WASM GCs by the backend
-    llvm::appendToGlobalCtors(M, initFunc, 0);
+    // does not help rn, because ctors are not automatically called on instantiation. Also, since wasm-ld doesnt support LTO plugins, it leads to duplicate calls (could add a global variable check but thats not as clean as simply exporting and calling a function) 
+    // llvm::appendToGlobalCtors(M, initFunc, 0);
 
     //printGlobals(M);
   }
@@ -169,20 +165,24 @@ PassPluginLibraryInfo getPassPluginInfo() {
       // Needed if we want full LTO? Maybe
       /*PB.registerFullLinkTimeOptimizationLastEPCallback(
         [&](ModulePassManager &MPM, OptimizationLevel OL) {
+          outs() << "HELLO\n";
           MPM.addPass(WASLR());
-          return true;
         }
       );*/
       // Needed if we want to run it during compilation (at the end)
       PB.registerOptimizerLastEPCallback(
         [&](ModulePassManager &MPM, OptimizationLevel OL) {
+          outs() << "HELLO NO LTO\n";
           MPM.addPass(WASLR());
           return true;
         }
       );
+      // Note: in LLVM 20, LTO should work like this: PB.registerOptimizerLastEPCallback(
+      //  [&](ModulePassManager &MPM, OptimizationLevel OL, ThinOrFullLTOPhase Phase) {
     }};
 }
 
 extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+  outs() << "WASLR Plugin Loaded\n";
   return getPassPluginInfo();
 }
