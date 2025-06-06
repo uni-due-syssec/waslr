@@ -83,7 +83,9 @@ namespace waslr {
     Type *i32Ty = Type::getInt32Ty(Ctx);
 
     // Declare __stack_pointer as external to be resolved later
-    GlobalVariable *stackPtr = new GlobalVariable(M, i32Ty, false, GlobalValue::ExternalLinkage, nullptr, "__stack_pointer");
+    // Address Space 1 = Wasm globals (https://github.com/emscripten-core/emscripten/issues/12793#issuecomment-915251249)
+    GlobalVariable *stackPtr = new GlobalVariable(M, i32Ty, false, GlobalValue::ExternalLinkage, nullptr, "__stack_pointer", nullptr, GlobalValue::NotThreadLocal, 1);
+    // __stack_pointer may/will come from a different linkage unit
     stackPtr->setDSOLocal(false);
 
     FunctionType *initFuncTy = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
@@ -101,8 +103,7 @@ namespace waslr {
     if (!consoleFunc) {
         consoleFunc = Function::Create(consoleFuncTy, GlobalValue::ExternalLinkage, "console", &M);
     }
-
-    // debug
+  
     Constant *debugStr = builder.CreateGlobalStringPtr("Setting stack pointer to 69420");
     builder.CreateCall(consoleFunc, {debugStr});
 
@@ -127,7 +128,9 @@ namespace waslr {
     //printGlobals(M);
   }
 
+  // TODO for static data
   void printGlobals(Module &M) {
+    
     for (auto &GV : M.globals()) {
       outs() << "Global: " << GV.getName() << "\n";
       errs() << "  Type: ";
@@ -138,6 +141,18 @@ namespace waslr {
       errs() << "  Linkage: " << GV.getLinkage() << "\n";
       errs() << "  Visibility: " << GV.getVisibility() << "\n";
       errs() << "  Address Space: " << GV.getAddressSpace() << "\n";
+      errs() << " ------ \n";
+      for (User *U : GV.users()){
+        if (Instruction *I = dyn_cast<Instruction>(U)) {
+            errs() << " INST FOUND \n";
+            I->print(errs());
+            errs() << "\n";
+        } else if (ConstantExpr *CE = dyn_cast<ConstantExpr>(U)) {
+            errs() << " CONST FOUND \n";
+            I->print(errs());
+            errs() << "\n";
+        }
+      }
 
       if (GV.hasInitializer()) {
           errs() << "  Initializer: ";
@@ -172,7 +187,6 @@ PassPluginLibraryInfo getPassPluginInfo() {
       // Needed if we want to run it during compilation (at the end)
       PB.registerOptimizerLastEPCallback(
         [&](ModulePassManager &MPM, OptimizationLevel OL) {
-          outs() << "HELLO NO LTO\n";
           MPM.addPass(WASLR());
           return true;
         }
