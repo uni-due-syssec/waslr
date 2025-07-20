@@ -13,6 +13,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/IR/Module.h"
 
+
 using namespace llvm;
 
 PreservedAnalyses WASLR::run(Module &M, ModuleAnalysisManager &AM) {
@@ -21,7 +22,8 @@ PreservedAnalyses WASLR::run(Module &M, ModuleAnalysisManager &AM) {
   /*for (Function &F : M) {
     waslr::handleFunction(F);
   }*/
-  waslr::randomize(M);
+  //waslr::randomize(M);
+  waslr::printSFSizeTest(M);
   return PreservedAnalyses::all();
 }
 
@@ -31,6 +33,25 @@ bool WASLR::isRequired(){
 
 namespace waslr {
 
+  void printSFSizeTest(Module &M){
+    const DataLayout &DL = M.getDataLayout();
+    for (Function &F: M){
+      llvm::errs() << "Function " << F.getName() << "\n";
+      for (BasicBlock &BB : F){
+        for (Instruction &Inst: BB){
+          if(AllocaInst *AI = dyn_cast<AllocaInst>(&Inst)){
+            std::optional<uint64_t> allocSize = AI->getAllocationSize(DL);
+            if (allocSize.has_value()) {
+                uint64_t sizeInBytes = allocSize.value();
+                llvm::errs() << "Alloca total size: " << sizeInBytes << " bytes\n";
+            } else {
+                llvm::errs() << "Variable size allocation or unknown size\n";
+            }
+          }
+        }
+      }
+    }
+  }
   /**
    * Notes:
    * - have a look at visitors in the future
