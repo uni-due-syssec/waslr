@@ -406,6 +406,7 @@ VALUE_CODEGENOPT(EmitCheckPathComponentsToStrip, 32, 0)
 /// Whether to report the hotness of the code region for optimization remarks.
 CODEGENOPT(DiagnosticsWithHotness, 1, 0)
 
+CODEGENOPT(EnableWASLR, 1, 0)
 /// Whether to use direct access relocations (instead of GOT) to reference external data symbols.
 CODEGENOPT(DirectAccessExternalData, 1, 0)
 

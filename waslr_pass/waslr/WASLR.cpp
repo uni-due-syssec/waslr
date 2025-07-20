@@ -1,10 +1,4 @@
-//===-- HelloWorld.cpp - Example Transformations --------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
+// This pass is currently not used
 
 #include "WASLR.h"
 #include "llvm/IR/PassManager.h"
@@ -65,7 +59,7 @@ namespace waslr {
   void randomize(Module &M){
     LLVMContext &Ctx = M.getContext();
 
-    FunctionType *initFuncTy = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
+    //FunctionType *initFuncTy = FunctionType::get(Type::getVoidTy(Ctx), {}, false);
     // WeakODRLinkage: To merge duplicate functions at link time
     //Function *initFunc = Function::Create(initFuncTy, GlobalValue::WeakODRLinkage, "init_waslr", &M);
     //initFunc->addFnAttr("wasm-export-name", "init_waslr");
@@ -97,7 +91,7 @@ namespace waslr {
         consoleFunc = Function::Create(consoleFuncTy, GlobalValue::ExternalLinkage, "console", &M);
     }
   
-    Constant *debugStr = builder.CreateGlobalStringPtr(msg);
+    Constant *debugStr = builder.CreateGlobalString(msg);
     builder.CreateCall(consoleFunc, {debugStr});
   }
 
@@ -165,13 +159,6 @@ namespace waslr {
     }
   }
 
-  int getReadOnlySize(Module &M) {
-    for (auto &GV : M.globals()){
-      // how to do it across modules without LTO?
-      // if one module has X bytes of RO data, while another has Y bytes 
-    }
-  }
-
   // TODO for static data
   void printGlobals(Module &M) {
     
@@ -185,17 +172,6 @@ namespace waslr {
       errs() << "  Linkage: " << GV.getLinkage() << "\n";
       errs() << "  Visibility: " << GV.getVisibility() << "\n";
       errs() << "  Address Space: " << GV.getAddressSpace() << "\n";
-      for (User *U : GV.users()){
-        if (Instruction *I = dyn_cast<Instruction>(U)) {
-            errs() << " INST FOUND \n";
-            I->print(errs());
-            errs() << "\n";
-        } else if (ConstantExpr *CE = dyn_cast<ConstantExpr>(U)) {
-            errs() << " CONST FOUND \n";
-            I->print(errs());
-            errs() << "\n";
-        }
-      }
 
       if (GV.hasInitializer()) {
           errs() << "  Initializer: ";
@@ -237,13 +213,11 @@ PassPluginLibraryInfo getPassPluginInfo() {
       );*/
       // Needed if we want to run it during compilation (at the end)
       PB.registerOptimizerLastEPCallback(
-        [&](ModulePassManager &MPM, OptimizationLevel OL) {
+        [&](ModulePassManager &MPM, OptimizationLevel OL, ThinOrFullLTOPhase Phase) {
           MPM.addPass(WASLR());
           return true;
         }
       );
-      // Note: in LLVM 20, LTO should work like this: PB.registerOptimizerLastEPCallback(
-      //  [&](ModulePassManager &MPM, OptimizationLevel OL, ThinOrFullLTOPhase Phase) {
     }};
 }
 

@@ -1910,6 +1910,8 @@ static uint64_t getRawAttributeMask(Attribute::AttrKind Val) {
     return 1ULL << 62;
   case Attribute::NoFree:
     return 1ULL << 63;
+  case Attribute::WASLRNoRand:
+    return 1ULL << 64;
   default:
     // Other attributes are not supported in the raw format,
     // as we ran out of space.
@@ -2252,6 +2254,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::NoExt;
   case bitc::ATTR_KIND_CAPTURES:
     return Attribute::Captures;
+  case bitc::ATTR_KIND_WASLR_NO_RAND:
+    return Attribute::WASLRNoRand;
   }
 }
 

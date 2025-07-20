@@ -983,17 +983,20 @@ bool TargetPassConfig::addCoreISelPasses() {
   enum class SelectorType { SelectionDAG, FastISel, GlobalISel };
   SelectorType Selector;
 
-  if (EnableFastISelOption == cl::BOU_TRUE)
-    Selector = SelectorType::FastISel;
+  if (EnableFastISelOption == cl::BOU_TRUE) 
+      Selector = SelectorType::FastISel;
   else if (EnableGlobalISelOption == cl::BOU_TRUE ||
            (TM->Options.EnableGlobalISel &&
-            EnableGlobalISelOption != cl::BOU_FALSE))
+            EnableGlobalISelOption != cl::BOU_FALSE)) 
     Selector = SelectorType::GlobalISel;
-  else if (TM->getOptLevel() == CodeGenOptLevel::None &&
-           TM->getO0WantsFastISel())
-    Selector = SelectorType::FastISel;
-  else
+  // Removed O0 check to force DAG use at every optimization level
+  //else if (TM->getOptLevel() == CodeGenOptLevel::None &&
+  //         TM->getO0WantsFastISel())
+  //  Selector = SelectorType::FastISel;
+  else 
     Selector = SelectorType::SelectionDAG;
+
+  
 
   // Set consistently TM->Options.EnableFastISel and EnableGlobalISel.
   if (Selector == SelectorType::FastISel) {

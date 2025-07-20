@@ -132,7 +132,7 @@ namespace llvm {
   class TargetOptions {
   public:
     TargetOptions()
-        : UnsafeFPMath(false), NoInfsFPMath(false), NoNaNsFPMath(false),
+        : UnsafeFPMath(false), EnableWASLR(false), NoInfsFPMath(false), NoNaNsFPMath(false),
           NoTrappingFPMath(true), NoSignedZerosFPMath(false),
           ApproxFuncFPMath(false), EnableAIXExtendedAltivecABI(false),
           HonorSignDependentRoundingFPMathOption(false), NoZerosInBSS(false),
@@ -174,6 +174,9 @@ namespace llvm {
     /// produce results that are "less precise" than IEEE allows.  This includes
     /// use of X86 instructions like FSIN and FCOS instead of libcalls.
     unsigned UnsafeFPMath : 1;
+
+    /// WASLR
+    unsigned EnableWASLR : 1;
 
     /// NoInfsFPMath - This flag is enabled when the
     /// -enable-no-infs-fp-math flag is specified on the command line. When

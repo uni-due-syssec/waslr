@@ -133,6 +133,8 @@ void DataSection::finalizeContents() {
       } else {
         WasmInitExpr initExpr;
         initExpr.Extended = false;
+        // This is for initializing a section with a global
+        // Does not help though because the global must be set before instantiation
         if (ctx.isPic) {
           assert(segment->startVA == 0);
           initExpr.Inst.Opcode = WASM_OPCODE_GLOBAL_GET;

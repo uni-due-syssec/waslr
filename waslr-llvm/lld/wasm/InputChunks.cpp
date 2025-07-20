@@ -114,13 +114,14 @@ void InputChunk::relocate(uint8_t *buf) const {
     LLVM_DEBUG(dbgs() << "apply reloc: type=" << relocTypeToString(rel.Type));
     if (rel.Type != R_WASM_TYPE_INDEX_LEB)
       LLVM_DEBUG(dbgs() << " sym=" << file->getSymbols()[rel.Index]->getName());
-    LLVM_DEBUG(dbgs() << " addend=" << rel.Addend << " index=" << rel.Index
-                      << " offset=" << rel.Offset << "\n");
+    
     // TODO(sbc): Check that the value is within the range of the
     // relocation type below.  Most likely we must error out here
     // if its not with range.
     uint64_t value = file->calcNewValue(rel, tombstone, this);
-
+    LLVM_DEBUG(dbgs() << " addend=" << rel.Addend << " index=" << rel.Index
+                      << " offset=" << rel.Offset << " value=" << value << "\n");
+    
     switch (rel.Type) {
     case R_WASM_TYPE_INDEX_LEB:
     case R_WASM_FUNCTION_INDEX_LEB:
@@ -338,15 +339,35 @@ void InputFunction::writeCompressed(uint8_t *buf) const {
   LLVM_DEBUG(dbgs() << "  total: " << (buf + chunkSize - orig) << "\n");
 }
 
+
+/*
+  getChunkOffset(0)
+  -> is MergeInputChunk
+    -> offset = 0
+    -> parentOffset = 91
+    -> outputSegOffs = 62
+      getChunkOffset(91)
+      -> is not MergeInputChunk
+      -> return 0 + 91
+
+
+*/
 uint64_t InputChunk::getChunkOffset(uint64_t offset) const {
   if (const auto *ms = dyn_cast<MergeInputChunk>(this)) {
+    // If the InputChunk is part of a merged Section we need the parent chunk offset
     LLVM_DEBUG(dbgs() << "getChunkOffset(merged): " << name << "\n");
     LLVM_DEBUG(dbgs() << "offset: " << offset << "\n");
     LLVM_DEBUG(dbgs() << "parentOffset: " << ms->getParentOffset(offset)
                       << "\n");
+    LLVM_DEBUG(dbgs() << "outputSegmentOffs: " << outputSegmentOffset
+                      << "\n");
     assert(ms->parent);
+    // I think "parent" is the final chunk that many MergeInputChunks are merged into
+    // e.g. the final data segment
     return ms->parent->getChunkOffset(ms->getParentOffset(offset));
   }
+  LLVM_DEBUG(dbgs() << "outputSegmentOffs2: " << outputSegmentOffset
+                      << "\n");
   return outputSegmentOffset + offset;
 }
 
@@ -355,6 +376,9 @@ uint64_t InputChunk::getOffset(uint64_t offset) const {
 }
 
 uint64_t InputChunk::getVA(uint64_t offset) const {
+  if (ctx.arg.waslr && outputSeg->isData()) {
+    return getChunkOffset(offset);
+  }
   return (outputSeg ? outputSeg->startVA : 0) + getChunkOffset(offset);
 }
 
@@ -422,7 +446,7 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
       }
     } else {
       assert(ctx.isPic);
-      const GlobalSymbol *baseSymbol = ctx.sym.memoryBase;
+      const GlobalSymbol *baseSymbol = ctx.sym.memoryBase; // Interesting part
       if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
           rel.Type == R_WASM_TABLE_INDEX_I64)
         baseSymbol = ctx.sym.tableBase;

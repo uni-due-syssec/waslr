@@ -592,6 +592,7 @@ static void readConfigs(opt::InputArgList &args) {
       args.hasFlag(OPT_merge_data_segments, OPT_no_merge_data_segments,
                    !ctx.arg.relocatable);
   ctx.arg.pie = args.hasFlag(OPT_pie, OPT_no_pie, false);
+  ctx.arg.waslr = args.hasArg(OPT_waslr);
   ctx.arg.printGcSections =
       args.hasFlag(OPT_print_gc_sections, OPT_no_print_gc_sections, false);
   ctx.arg.saveTemps = args.hasArg(OPT_save_temps);
@@ -948,6 +949,7 @@ static void createSyntheticSymbols() {
 
   bool is64 = ctx.arg.is64.value_or(false);
 
+  auto *globalType = is64 ? &globalTypeI64 : &globalTypeI32;
   if (ctx.isPic) {
     ctx.sym.stackPointer =
         createUndefinedGlobal("__stack_pointer", ctx.arg.is64.value_or(false)
@@ -958,7 +960,6 @@ static void createSyntheticSymbols() {
     // which to load our static data and function table.
     // See:
     // https://github.com/WebAssembly/tool-conventions/blob/main/DynamicLinking.md
-    auto *globalType = is64 ? &globalTypeI64 : &globalTypeI32;
     ctx.sym.memoryBase = createUndefinedGlobal("__memory_base", globalType);
     ctx.sym.tableBase = createUndefinedGlobal("__table_base", globalType);
     ctx.sym.memoryBase->markLive();
@@ -967,6 +968,12 @@ static void createSyntheticSymbols() {
     // For non-PIC code
     ctx.sym.stackPointer = createGlobalVariable("__stack_pointer", true);
     ctx.sym.stackPointer->markLive();
+    if (ctx.arg.waslr) {
+      ctx.sym.wDataBase = createGlobalVariable("__wdata_base", true);
+      ctx.sym.wSeed = createUndefinedGlobal("__waslr_seed", globalType);
+      ctx.sym.wDataBase->markLive();
+      ctx.sym.wSeed->markLive();
+    }
   }
 
   if (ctx.arg.sharedMemory) {
@@ -1358,6 +1365,15 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     symtab->addFile(f);
   if (errorCount())
     return;
+  
+  if (ctx.arg.waslr) {
+    // make sure required functions are available
+    for (const char *name : {"rfree", "ralloc", "__waslr_init"}) {
+      Symbol *sym = symtab->find(name);
+      if (!sym || sym->isUndefined())
+        error(Twine("WASLR is enabled, but required symbol '") + name + "' is missing.");
+    }
+  }
 
   // Handle the `--undefined <sym>` options.
   for (auto *arg : args.filtered(OPT_undefined))

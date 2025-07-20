@@ -1,0 +1,9 @@
+cd build
+cmake -G Ninja ../llvm \
+  -DLLVM_TARGETS_TO_BUILD="WebAssembly" \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_BUILD_DOCS=OFF \
+  -DLLVM_ENABLE_RTTI=ON \
+  -DLLVM_ENABLE_EH=ON

@@ -394,6 +394,8 @@ static bool initTargetOptions(const CompilerInstance &CI,
     break;
   }
 
+  Options.EnableWASLR = CodeGenOpts.EnableWASLR;
+
   Options.BinutilsVersion =
       llvm::TargetMachine::parseBinutilsVersion(CodeGenOpts.BinutilsVersion);
   Options.UseInitArray = CodeGenOpts.UseInitArray;

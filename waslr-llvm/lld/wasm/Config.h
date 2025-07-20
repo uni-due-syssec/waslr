@@ -73,6 +73,7 @@ struct Config {
   bool mergeDataSegments;
   bool noinhibitExec;
   bool pie;
+  bool waslr;
   bool printGcSections;
   bool relocatable;
   bool saveTemps;
@@ -155,8 +156,12 @@ struct Ctx {
     // the start and end of the stack region.  stackPointer is initialized to
     // stackHigh and grows downwards towards stackLow
     GlobalSymbol *stackPointer;
+    
     DefinedData *stackLow;
     DefinedData *stackHigh;
+
+    GlobalSymbol *wDataBase;
+    GlobalSymbol *wSeed;
 
     // __tls_base
     // Global that holds the address of the base of the current thread's
@@ -235,7 +240,7 @@ struct Ctx {
 
     // __memory_base
     // Used in PIC code for offset of global data
-    UndefinedGlobal *memoryBase;
+    GlobalSymbol *memoryBase;
     DefinedData *definedMemoryBase;
 
     // __indirect_function_table

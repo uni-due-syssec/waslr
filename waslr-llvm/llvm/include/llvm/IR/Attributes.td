@@ -85,6 +85,8 @@ def Alignment : IntAttr<"align", IntersectCustom, [ParamAttr, RetAttr]>;
 /// aligned_alloc and aligned ::operator::new.
 def AllocAlign: EnumAttr<"allocalign", IntersectAnd, [ParamAttr]>;
 
+def WASLRNoRand : EnumAttr<"waslr_no_rand", IntersectAnd, [FnAttr]>;
+
 /// Describes behavior of an allocator function in terms of known properties.
 def AllocKind: IntAttr<"allockind", IntersectPreserve, [FnAttr]>;
 

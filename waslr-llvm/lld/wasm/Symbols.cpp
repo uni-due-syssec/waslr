@@ -293,6 +293,7 @@ uint64_t DefinedData::getVA(bool absolute) const {
     return getOutputSegmentOffset();
   if (segment)
     return segment->getVA(value);
+  LLVM_DEBUG(dbgs() << "getVA Value: " << value << "\n");
   return value;
 }
 

@@ -6226,6 +6226,18 @@ def fno_pie : Flag<["-"], "fno-pie">, Group<f_Group>;
 } // let Vis = [Default, FlangOption]
 
 //===----------------------------------------------------------------------===//
+// WASLR options
+//===----------------------------------------------------------------------===//
+
+let Visibility = [ClangOption, CC1Option, CC1AsOption] in {
+
+def fwaslr : Flag<["-"], "fwaslr">,
+  HelpText<"Enable Data Randomization for Web Assembly">,
+  MarshallingInfoFlag<CodeGenOpts<"EnableWASLR">>;
+  
+} // let Vis = [ClangOption, CC1Option, CC1AsOption]
+
+//===----------------------------------------------------------------------===//
 // Target Options (clang + flang)
 //===----------------------------------------------------------------------===//
 let Flags = [TargetSpecific] in {

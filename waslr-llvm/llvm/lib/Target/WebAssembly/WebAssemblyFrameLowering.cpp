@@ -227,6 +227,13 @@ WebAssemblyFrameLowering::getOpcGlobSet(const MachineFunction &MF) {
              : WebAssembly::GLOBAL_SET_I32;
 }
 
+wasm::ValType 
+WebAssemblyFrameLowering::getIValueType(const MachineFunction &MF) {
+  return MF.getSubtarget<WebAssemblySubtarget>().hasAddr64()
+             ? wasm::ValType::I64
+             : wasm::ValType::I32;
+}
+
 void WebAssemblyFrameLowering::writeSPToGlobal(
     unsigned SrcReg, MachineFunction &MF, MachineBasicBlock &MBB,
     MachineBasicBlock::iterator &InsertStore, const DebugLoc &DL) const {
@@ -256,6 +263,48 @@ WebAssemblyFrameLowering::eliminateCallFramePseudoInstr(
   return MBB.erase(I);
 }
 
+void copyValTypes(ArrayRef<wasm::ValType> In, SmallVectorImpl<wasm::ValType> &Out){
+  Out.clear();
+  for (wasm::ValType Ty : In)
+    Out.push_back(Ty);
+}
+
+void setFunctionSignature(MCSymbolWasm *FnSym, MCContext &Ctx, ArrayRef<wasm::ValType> Params = {}, ArrayRef<wasm::ValType> Results = {}) { 
+  FnSym->setType(wasm::WASM_SYMBOL_TYPE_FUNCTION);
+
+  auto *Sig = Ctx.createWasmSignature();
+  copyValTypes(Params, Sig->Params);
+  copyValTypes(Results, Sig->Returns);
+
+  FnSym->setSignature(Sig);
+}
+
+namespace llvm {
+  struct WasmPEContext {
+    const WebAssemblyInstrInfo *TII;
+    MachineRegisterInfo &MRI;
+    MachineBasicBlock::iterator InsertPt;
+    const TargetRegisterClass *PtrRC;
+    unsigned SPRegister; 
+    uint64_t SFSize;
+    DebugLoc DL;
+  };
+}
+
+/*
+  Plan:
+  - Remove original prologue
+  - Replace by:
+    1) ptr = getRandomChunk(SF_size); // from walloc.c
+    2) save current SP in local // pretty much base pointer
+    3) setSP(ptr - SF_size) // subtract so that offsets from loads / stores still work
+
+  TODO: Make sure that the prologue of "ralloc" does not call "ralloc". I think we can allow ralloc to not use a randomized stack
+        - Maybe just use the original Prologue / Epilogue in that case, so the ralloc StackFrame is allocated behind the current function's stack frame
+        - This would also help since the current implementation uses a VLA
+
+        Least invasive method: check FuncName in emitPrologue, then either call a function for the randomized Prologue or the standard Prologue
+*/
 void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
                                             MachineBasicBlock &MBB) const {
   // TODO: Do ".setMIFlag(MachineInstr::FrameSetup)" on emitted instructions
@@ -270,6 +319,7 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
   auto &ST = MF.getSubtarget<WebAssemblySubtarget>();
   const auto *TII = ST.getInstrInfo();
   auto &MRI = MF.getRegInfo();
+  bool waslrEnabled = MF.getTarget().Options.EnableWASLR;
 
   auto InsertPt = MBB.begin();
   while (InsertPt != MBB.end() &&
@@ -277,35 +327,34 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
     ++InsertPt;
   DebugLoc DL;
 
-  const TargetRegisterClass *PtrRC =
-      MRI.getTargetRegisterInfo()->getPointerRegClass(MF);
-  unsigned SPReg = getSPReg(MF);
-  if (StackSize)
-    SPReg = MRI.createVirtualRegister(PtrRC);
+  // I32RegClass or I64RegClass depending on Wasm target (Wasm32 vs Wasm64)
+  const TargetRegisterClass *PtrRC = MRI.getTargetRegisterInfo()->getPointerRegClass(MF);
+
+  unsigned SPReg = getSPReg(MF); // the actual SP global
+  if (StackSize) SPReg = MRI.createVirtualRegister(PtrRC); // a local
 
   const char *ES = "__stack_pointer";
   auto *SPSymbol = MF.createExternalSymbolName(ES);
   BuildMI(MBB, InsertPt, DL, TII->get(getOpcGlobGet(MF)), SPReg)
       .addExternalSymbol(SPSymbol);
 
-  bool HasBP = hasBP(MF);
-  if (HasBP) {
-    auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
-    Register BasePtr = MRI.createVirtualRegister(PtrRC);
-    FI->setBasePointerVreg(BasePtr);
-    BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), BasePtr)
-        .addReg(SPReg);
+  const WasmPEContext Ctx {
+    TII,
+    MRI,
+    InsertPt,
+    PtrRC,
+    SPReg,
+    StackSize,
+    DL,
+  };
+
+  if (waslrEnabled && !MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)) {
+    emitRandPrologue(MF, MBB, Ctx);
+  } else {
+    emitOrigPrologue(MF, MBB, Ctx);
   }
-  if (StackSize) {
-    // Subtract the frame size
-    Register OffsetReg = MRI.createVirtualRegister(PtrRC);
-    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), OffsetReg)
-        .addImm(StackSize);
-    BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
-        .addReg(SPReg)
-        .addReg(OffsetReg);
-  }
-  if (HasBP) {
+
+  if (hasBP(MF)) {
     Register BitmaskReg = MRI.createVirtualRegister(PtrRC);
     Align Alignment = MFI.getMaxAlign();
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), BitmaskReg)
@@ -326,6 +375,13 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
   }
 }
 
+/*
+  Plan:
+  - Remove original epilogue
+  - Replace by:
+    1) setSP(base pointer)
+    2) free(ptr) //from prologue
+*/
 void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
                                             MachineBasicBlock &MBB) const {
   uint64_t StackSize = MF.getFrameInfo().getStackSize();
@@ -335,6 +391,7 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   const auto *TII = ST.getInstrInfo();
   auto &MRI = MF.getRegInfo();
   auto InsertPt = MBB.getFirstTerminator();
+  bool waslrEnabled = MF.getTarget().Options.EnableWASLR;
   DebugLoc DL;
 
   if (InsertPt != MBB.end())
@@ -344,12 +401,71 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   // subtracted in the prolog.
   unsigned SPReg = 0;
   unsigned SPFPReg = hasFP(MF) ? getFPReg(MF) : getSPReg(MF);
+  const TargetRegisterClass *PtrRC = MRI.getTargetRegisterInfo()->getPointerRegClass(MF);
+
+  const WasmPEContext Ctx {
+    TII,
+    MRI,
+    InsertPt,
+    PtrRC,
+    SPReg,
+    StackSize,
+    DL,
+  };
+
+  if (waslrEnabled && !MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)) {
+    emitRandEpilogue(MF, MBB, Ctx, SPFPReg);
+  } else {
+    emitOrigEpilogue(MF, MBB, Ctx, SPFPReg);
+  }
+}
+
+void WebAssemblyFrameLowering::emitOrigPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
+  auto *PtrRC = Ctx.PtrRC;
+  auto InsertPt = Ctx.InsertPt;
+  auto *TII = Ctx.TII;
+  auto &MRI = Ctx.MRI;
+  auto SPReg = Ctx.SPRegister;
+  auto StackSize = Ctx.SFSize;
+  auto DL = Ctx.DL;
+
+  bool HasBP = hasBP(MF);
+  if (HasBP) {
+    auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
+    Register BasePtr = MRI.createVirtualRegister(PtrRC);
+	// BasePtr = LOCAL GET SPReg 
+    FI->setBasePointerVreg(BasePtr);
+    BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), BasePtr)
+        .addReg(SPReg);
+  }
+  
+  // if function has Stack Frame, subtract size from __stack_pointer 
+  if (StackSize) {
+	// Create Register to hold the constant Stack Size
+    Register OffsetReg = MRI.createVirtualRegister(PtrRC);
+	// OffsetReg = const StackSize 
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), OffsetReg)
+        .addImm(StackSize);
+	// SPReg = SPReg - OffsetReg 
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
+        .addReg(SPReg)
+        .addReg(OffsetReg);
+  }
+}
+
+void WebAssemblyFrameLowering::emitOrigEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const {
+  auto *PtrRC = Ctx.PtrRC;
+  auto InsertPt = Ctx.InsertPt;
+  auto *TII = Ctx.TII;
+  auto &MRI = Ctx.MRI;
+  auto SPReg = Ctx.SPRegister;
+  auto StackSize = Ctx.SFSize;
+  auto DL = Ctx.DL;
+
   if (hasBP(MF)) {
     auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
     SPReg = FI->getBasePointerVreg();
   } else if (StackSize) {
-    const TargetRegisterClass *PtrRC =
-        MRI.getTargetRegisterInfo()->getPointerRegClass(MF);
     Register OffsetReg = MRI.createVirtualRegister(PtrRC);
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), OffsetReg)
         .addImm(StackSize);
@@ -365,6 +481,89 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   }
 
   writeSPToGlobal(SPReg, MF, MBB, InsertPt, DL);
+}
+
+void WebAssemblyFrameLowering::emitRandPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
+  auto *PtrRC = Ctx.PtrRC;
+  auto InsertPt = Ctx.InsertPt;
+  auto *TII = Ctx.TII;
+  auto &MRI = Ctx.MRI;
+  auto SPReg = Ctx.SPRegister;
+  auto StackSize = Ctx.SFSize;
+  auto DL = Ctx.DL;
+
+  // Instead of only using the BasePtr when required, we use always use it to store the previous Stack Pointer
+  // Advantage: We can access the same Register in the Epilogue without further effort
+  // Otherwise: Modify WebAssemblyMachineFunctionInfo and add a new field to store "our" Base Pointer
+
+  Register BasePtr = MRI.createVirtualRegister(PtrRC);
+  auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
+  FI->setBasePointerVreg(BasePtr);
+  
+  BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), BasePtr)
+      .addReg(SPReg);
+
+  if (StackSize){
+    // get pointer to random allocation of SFSize bytes
+    // SFPtr = getRandomChunk(SF_Size)
+    Register SFPtr = MRI.createVirtualRegister(PtrRC);
+    Register SFSizeReg = MRI.createVirtualRegister(PtrRC);
+    // Save Register for Epilogue
+    FI->setRSFPointerVreg(SFPtr);
+
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SFSizeReg)
+      .addImm(StackSize);
+
+    MCSymbolWasm *AllocFn = cast<MCSymbolWasm>(MF.getContext().getOrCreateSymbol("ralloc"));
+    wasm::ValType VT = getIValueType(MF);
+    SmallVector<wasm::ValType, 1> params = {VT};
+    SmallVector<wasm::ValType, 1> results = {VT};
+    setFunctionSignature(AllocFn, MF.getContext(), params, results);
+
+    BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::CALL))
+      .addDef(SFPtr)
+      .addSym(AllocFn)
+      .addReg(SFSizeReg);
+
+    // TODO: Check if this is still necessary
+    /*BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), SFPtr)
+      .addReg(SFPtr);
+    */  
+    // Since we plan to use ralloc for both Stack and Heap, we cannot return a pointer to the END of the chunk by default
+    // Instead, we subtract SFSize from the returned pointer
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
+      .addReg(SFPtr)
+      .addReg(SFSizeReg);
+  }
+}
+
+void WebAssemblyFrameLowering::emitRandEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const {
+  auto InsertPt = Ctx.InsertPt;
+  auto *TII = Ctx.TII;
+  auto SPReg = Ctx.SPRegister;
+  auto StackSize = Ctx.SFSize;
+  auto DL = Ctx.DL;
+  auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
+  
+  // We always want to restore the original SP from the BP
+  if (hasBP(MF) || StackSize) {
+    SPReg = FI->getBasePointerVreg();
+  } else {
+    SPReg = SPFPReg;
+  }
+  writeSPToGlobal(SPReg, MF, MBB, InsertPt, DL);
+  // free the space allocated for the stack
+  if (StackSize) {
+    unsigned RSFPtrReg = FI->getRSFPointerVreg();
+    MCSymbolWasm *FreeFn = cast<MCSymbolWasm>(MF.getContext().getOrCreateSymbol("rfree"));
+    wasm::ValType VT = getIValueType(MF);
+    SmallVector<wasm::ValType, 1> params = {VT};
+    setFunctionSignature(FreeFn, MF.getContext(), params);
+
+    BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::CALL))
+      .addSym(FreeFn)
+      .addReg(RSFPtrReg);
+  }
 }
 
 bool WebAssemblyFrameLowering::isSupportedStackID(

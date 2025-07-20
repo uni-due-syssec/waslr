@@ -35,6 +35,8 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/IR/GlobalVariable.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "wasm-lower"
@@ -1931,7 +1933,8 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
          "Unexpected target flags on generic GlobalAddressSDNode");
   if (!WebAssembly::isValidAddressSpace(GA->getAddressSpace()))
     fail(DL, DAG, "Invalid address space for WebAssembly target");
-
+  
+  bool waslrEnabled = getTargetMachine().Options.EnableWASLR;
   unsigned OperandFlags = 0;
   const GlobalValue *GV = GA->getGlobal();
   // Since WebAssembly tables cannot yet be shared accross modules, we don't
@@ -1963,6 +1966,29 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
     OperandFlags = WebAssemblyII::MO_GOT;
   }
 
+  if (waslrEnabled) {
+    if (!WebAssembly::isWebAssemblyTableType(GV->getValueType())){
+      if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
+        // Identify static data
+        if (GVar->hasInitializer() && GVar->isConstant()) {
+          if (getTargetMachine().shouldAssumeDSOLocal(GV)) {
+            MachineFunction &MF = DAG.getMachineFunction();
+            MVT PtrVT = getPointerTy(MF.getDataLayout());
+            const char *BaseName = MF.createExternalSymbolName("__wdata_base");
+            OperandFlags = WebAssemblyII::MO_MEMORY_BASE_REL;
+            SDValue BaseAddr = DAG.getNode(WebAssemblyISD::Wrapper2, DL, PtrVT,
+                            DAG.getTargetExternalSymbol(BaseName, PtrVT));
+            SDValue SymAddr = DAG.getNode(WebAssemblyISD::WrapperREL2, DL, VT,
+                DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT, GA->getOffset(),
+                                          OperandFlags));
+            return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
+          }
+        }
+      }
+    }
+  }
+
+  // Only reached by some of the default wasm globals (and functions when compiling without PIC)
   return DAG.getNode(WebAssemblyISD::Wrapper, DL, VT,
                      DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,
                                                 GA->getOffset(), OperandFlags));

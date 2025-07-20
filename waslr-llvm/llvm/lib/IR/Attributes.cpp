@@ -560,6 +560,9 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
   if (hasAttribute(Attribute::StackAlignment))
     return AttrWithBytesToString("alignstack");
 
+  if (hasAttribute(Attribute::WASLRNoRand))
+    return AttrWithBytesToString("waslr_no_rand");
+
   if (hasAttribute(Attribute::Dereferenceable))
     return AttrWithBytesToString("dereferenceable");
 

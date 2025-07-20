@@ -1814,11 +1814,17 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
     Info.Kind = WS.getType().value_or(wasm::WASM_SYMBOL_TYPE_DATA);
     Info.Flags = Flags;
     if (!WS.isData()) {
+      // both __memory_base and __wdata_base are data
+      LLVM_DEBUG(dbgs() << "512DATA: " << Info.Name << ": " << Info.Kind << "\n"); 
       assert(WasmIndices.count(&WS) > 0);
       Info.ElementIndex = WasmIndices.find(&WS)->second;
     } else if (WS.isDefined()) {
+      LLVM_DEBUG(dbgs() << "512DEFINED: " << Info.Name << ": " << Info.Kind << "\n"); 
       assert(DataLocations.count(&WS) > 0);
       Info.DataRef = DataLocations.find(&WS)->second;
+    }
+    else{
+      LLVM_DEBUG(dbgs() << "512DATA: " << Info.Name << ": " << Info.Kind << "\n"); 
     }
     WS.setIndex(SymbolInfos.size());
     SymbolInfos.emplace_back(Info);

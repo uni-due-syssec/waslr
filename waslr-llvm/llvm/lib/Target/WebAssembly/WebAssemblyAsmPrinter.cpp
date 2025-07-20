@@ -226,9 +226,9 @@ MCSymbol *WebAssemblyAsmPrinter::getOrCreateWasmSymbol(StringRef Name) {
   // Clang-provided symbols.
   if (Name == "__stack_pointer" || Name == "__tls_base" ||
       Name == "__memory_base" || Name == "__table_base" ||
-      Name == "__tls_size" || Name == "__tls_align") {
+      Name == "__tls_size" || Name == "__tls_align" || Name == "__wdata_base") {
     bool Mutable =
-        Name == "__stack_pointer" || Name == "__tls_base";
+        Name == "__stack_pointer" || Name == "__tls_base" || Name == "__wdata_base";
     WasmSym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
     WasmSym->setGlobalType(wasm::WasmGlobalType{
         uint8_t(Subtarget.hasAddr64() ? wasm::WASM_TYPE_I64
@@ -307,6 +307,7 @@ void WebAssemblyAsmPrinter::emitDecls(const Module &M) {
   MachineModuleInfoWasm &MMIW = MMI->getObjFileInfo<MachineModuleInfoWasm>();
   for (StringRef Name : MMIW.MachineSymbolsUsed) {
     auto *WasmSym = cast<MCSymbolWasm>(getOrCreateWasmSymbol(Name));
+    LLVM_DEBUG(dbgs() << "Create Symbol: " << Name << "\n");
     if (WasmSym->isFunction()) {
       // TODO(wvo): is there any case where this overlaps with the call to
       // emitFunctionType in the loop below?
@@ -314,13 +315,19 @@ void WebAssemblyAsmPrinter::emitDecls(const Module &M) {
     }
   }
 
+  if (TM.Options.EnableWASLR) {
+    auto *WasmSym = cast<MCSymbolWasm>(getOrCreateWasmSymbol("__wdata_base"));
+    LLVM_DEBUG(dbgs() << "Create Symbol: __wdata_base \n");
+  }
+
   for (auto &It : OutContext.getSymbols()) {
     // Emit .globaltype, .tagtype, or .tabletype declarations for extern
     // declarations, i.e. those that have only been declared (but not defined)
     // in the current module
     auto Sym = cast_or_null<MCSymbolWasm>(It.getValue().Symbol);
-    if (Sym && !Sym->isDefined())
+    if (Sym && !Sym->isDefined()) {
       emitSymbolType(Sym);
+    }
   }
 
   DenseSet<MCSymbol *> InvokeSymbols;

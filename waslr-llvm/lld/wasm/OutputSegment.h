@@ -31,8 +31,15 @@ public:
 
   bool isTLS() const { return name == ".tdata"; }
 
+
+  bool isData() const { 
+    // starts_with for data to support custom named sections which usually start with .data
+    return name.starts_with(".data") || name == ".rodata" || name == ".bss"; 
+  }
+  
   StringRef name;
   bool isBss = false;
+
   uint32_t index = 0;
   uint32_t linkingFlags = 0;
   uint32_t initFlags = 0;

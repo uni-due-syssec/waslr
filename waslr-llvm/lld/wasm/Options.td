@@ -179,6 +179,9 @@ def allow_undefined: F<"allow-undefined">,
            "This options is equivalent to --import-undefined "
            "and --unresolved-symbols=ignore-all">;
 
+def waslr: F<"waslr">,
+  HelpText<"Enable Data Randomization via WASLR">;
+
 def import_undefined: F<"import-undefined">,
   HelpText<"Turn undefined symbols into imports where possible">;
 

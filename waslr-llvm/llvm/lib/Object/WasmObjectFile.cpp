@@ -1026,6 +1026,7 @@ Error WasmObjectFile::parseRelocSection(StringRef Name, ReadContext &Ctx) {
   uint32_t RelocCount = readVaruint32(Ctx);
   uint32_t EndOffset = Section.Content.size();
   uint32_t PreviousOffset = 0;
+  
   while (RelocCount--) {
     wasm::WasmRelocation Reloc = {};
     uint32_t type = readVaruint32(Ctx);
@@ -1085,6 +1086,7 @@ Error WasmObjectFile::parseRelocSection(StringRef Name, ReadContext &Ctx) {
     case wasm::R_WASM_MEMORY_ADDR_REL_SLEB:
     case wasm::R_WASM_MEMORY_ADDR_TLS_SLEB:
     case wasm::R_WASM_MEMORY_ADDR_LOCREL_I32:
+      LLVM_DEBUG(dbgs() << "RELOC INDEX: " << Reloc.Index << "\n");
       if (!isValidDataSymbol(Reloc.Index))
         return badReloc("invalid data relocation");
       Reloc.Addend = readVarint32(Ctx);
@@ -1554,6 +1556,7 @@ bool WasmObjectFile::isValidTagSymbol(uint32_t Index) const {
 }
 
 bool WasmObjectFile::isValidDataSymbol(uint32_t Index) const {
+  LLVM_DEBUG(dbgs() << Symbols[Index].Info.Name << ":: Size: " << Symbols.size() << "; DATA: " << Symbols[Index].isTypeData() << "\n");
   return Index < Symbols.size() && Symbols[Index].isTypeData();
 }
 

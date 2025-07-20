@@ -62,6 +62,11 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // after WebAssemblyExplicitLocals
   unsigned FrameBaseLocal = -1U;
 
+  // Local holding the pointer to the allocated Stack frame
+  // FrameBase stores the end of the Stack frame, but we need the start
+  // To ensure that the FrameBase Ptr works as it was intended we do not modify its behavior and instead add our own Register that stores the beginning of the Stack Frame
+  unsigned RSFPtrVreg = -1U;
+
   // Function properties.
   bool CFGStackified = false;
 
@@ -104,6 +109,10 @@ public:
     assert(BasePtrVreg != -1U && "Base ptr vreg hasn't been set");
     return BasePtrVreg;
   }
+  unsigned getRSFPointerVreg() const {
+    assert(RSFPtrVreg != -1U && "Random SF Pointer vreg hasn't been set");
+    return RSFPtrVreg;
+  }
   void setFrameBaseVreg(unsigned Reg) { FrameBaseVreg = Reg; }
   unsigned getFrameBaseVreg() const {
     assert(FrameBaseVreg != -1U && "Frame base vreg hasn't been set");
@@ -118,35 +127,36 @@ public:
     return FrameBaseLocal;
   }
   void setBasePointerVreg(unsigned Reg) { BasePtrVreg = Reg; }
+  void setRSFPointerVreg(unsigned Reg) { RSFPtrVreg = Reg; }
 
-  void stackifyVReg(MachineRegisterInfo &MRI, unsigned VReg) {
+  void stackifyVReg(MachineRegisterInfo &MRI, Register VReg) {
     assert(MRI.getUniqueVRegDef(VReg));
-    auto I = Register::virtReg2Index(VReg);
+    auto I = VReg.virtRegIndex();
     if (I >= VRegStackified.size())
       VRegStackified.resize(I + 1);
     VRegStackified.set(I);
   }
-  void unstackifyVReg(unsigned VReg) {
-    auto I = Register::virtReg2Index(VReg);
+  void unstackifyVReg(Register VReg) {
+    auto I = VReg.virtRegIndex();
     if (I < VRegStackified.size())
       VRegStackified.reset(I);
   }
-  bool isVRegStackified(unsigned VReg) const {
-    auto I = Register::virtReg2Index(VReg);
+  bool isVRegStackified(Register VReg) const {
+    auto I = VReg.virtRegIndex();
     if (I >= VRegStackified.size())
       return false;
     return VRegStackified.test(I);
   }
 
   void initWARegs(MachineRegisterInfo &MRI);
-  void setWAReg(unsigned VReg, unsigned WAReg) {
+  void setWAReg(Register VReg, unsigned WAReg) {
     assert(WAReg != WebAssembly::UnusedReg);
-    auto I = Register::virtReg2Index(VReg);
+    auto I = VReg.virtRegIndex();
     assert(I < WARegs.size());
     WARegs[I] = WAReg;
   }
-  unsigned getWAReg(unsigned VReg) const {
-    auto I = Register::virtReg2Index(VReg);
+  unsigned getWAReg(Register VReg) const {
+    auto I = VReg.virtRegIndex();
     assert(I < WARegs.size());
     return WARegs[I];
   }

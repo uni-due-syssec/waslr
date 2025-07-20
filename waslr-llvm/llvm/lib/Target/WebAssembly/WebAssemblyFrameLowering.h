@@ -16,8 +16,11 @@
 #define LLVM_LIB_TARGET_WEBASSEMBLY_WEBASSEMBLYFRAMELOWERING_H
 
 #include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/BinaryFormat/Wasm.h"
 
 namespace llvm {
+
+struct WasmPEContext;
 
 class WebAssemblyFrameLowering final : public TargetFrameLowering {
 public:
@@ -40,7 +43,11 @@ public:
   /// These methods insert prolog and epilog code into the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
-
+  void emitOrigPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const;
+  void emitOrigEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const;
+  void emitRandPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const;
+  void emitRandEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const;
+  
   bool hasReservedCallFrame(const MachineFunction &MF) const override;
   bool isSupportedStackID(TargetStackID::Value ID) const override;
   DwarfFrameBase getDwarfFrameBase(const MachineFunction &MF) const override;
@@ -66,6 +73,7 @@ public:
   static unsigned getOpcAnd(const MachineFunction &MF);
   static unsigned getOpcGlobGet(const MachineFunction &MF);
   static unsigned getOpcGlobSet(const MachineFunction &MF);
+  static wasm::ValType getIValueType(const MachineFunction &MF);
 
 protected:
   bool hasFPImpl(const MachineFunction &MF) const override;

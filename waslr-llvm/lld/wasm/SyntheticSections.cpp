@@ -618,7 +618,7 @@ void DataCountSection::writeBody() {
 }
 
 bool DataCountSection::isNeeded() const {
-  return numSegments && ctx.arg.sharedMemory;
+  return numSegments && (ctx.arg.sharedMemory || ctx.arg.waslr);
 }
 
 void LinkingSection::writeBody() {

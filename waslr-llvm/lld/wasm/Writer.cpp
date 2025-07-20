@@ -40,6 +40,7 @@
 #include <cstdarg>
 #include <map>
 #include <optional>
+#include <algorithm>
 
 #define DEBUG_TYPE "lld"
 
@@ -1017,8 +1018,9 @@ static StringRef getOutputDataSegmentName(const InputChunk &seg) {
 OutputSegment *Writer::createOutputSegment(StringRef name) {
   LLVM_DEBUG(dbgs() << "new segment: " << name << "\n");
   OutputSegment *s = make<OutputSegment>(name);
-  if (ctx.arg.sharedMemory)
+  if (ctx.arg.sharedMemory || (ctx.arg.waslr && s->isData())){
     s->initFlags = WASM_DATA_SEGMENT_IS_PASSIVE;
+  }
   if (!ctx.arg.relocatable && name.starts_with(".bss"))
     s->isBss = true;
   segments.push_back(s);
@@ -1312,16 +1314,79 @@ void Writer::createInitMemoryFunction() {
       // Initialize passive data segments
       writeU8(os, WASM_OPCODE_END, "end $init");
     } else {
-      writeUleb128(os, 0, "num local decls");
+      writeUleb128(os, 1, "num local decls"); // x local groups total
+      writeUleb128(os, 1, "local count"); // 1 local in this group
+      writeU8(os, WASM_TYPE_I32, "local type"); // type i32
     }
+
+    if (ctx.arg.waslr) {
+      // call __waslr_init
+      const FunctionSymbol *waslr_init = nullptr;
+      waslr_init = dyn_cast_or_null<FunctionSymbol>(symtab->find("__waslr_init"));
+    
+      if (waslr_init && waslr_init->hasFunctionIndex()) {
+        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+        writeUleb128(os, ctx.sym.wSeed->getGlobalIndex(),"__waslr_seed");
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, waslr_init->getFunctionIndex(), "function index");
+      }
+
+      // need the total size beforehand for the allocation but we cannot simply add the sizes due to alignment
+      // therefore we use the absolute segment offsets to calculate the true size since they include the alignment
+      uint64_t minStartVA = -1;
+      uint64_t maxEndVA = 0;
+      
+      for (const OutputSegment *s : segments) {
+        if (needsPassiveInitialization(s)) {
+          auto sVA = s->startVA;
+          minStartVA = std::min(minStartVA, sVA);
+          maxEndVA = std::max(maxEndVA, sVA + s->size);
+        }
+      }
+
+      const uint64_t total_psegment_size = maxEndVA - minStartVA;
+
+      // If there is atleast on passive segment, allocate space
+      if (hasPassiveInitializedSegments()) {
+        const FunctionSymbol *Ralloc = nullptr;
+        assert((Ralloc = dyn_cast_or_null<FunctionSymbol>(symtab->find("ralloc"))) && "Symbol 'ralloc' missing or not a FunctionSymbol");
+        writeI32Const(os, total_psegment_size, "memory region size"); 
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, Ralloc->getFunctionIndex(), "function index");
+        // store return value 
+        writeU8(os, WASM_OPCODE_LOCAL_TEE, "local.tee");
+        writeUleb128(os, 0, "local index");
+      }
+    }
+
+
+    bool firstPSegHandled = false;
+    uint64_t lastPSegStartVA = 0;
 
     for (const OutputSegment *s : segments) {
       if (needsPassiveInitialization(s)) {
-        // For passive BSS segments we can simple issue a memory.fill(0).
-        // For non-BSS segments we do a memory.init.  Both these
-        // instructions take as their first argument the destination
-        // address.
-        writePtrConst(os, s->startVA, is64, "destination address");
+        if (ctx.arg.waslr) {
+          // dataSecOffsSum > 0 => atleast one passive segment has been handled already
+          // the first passive segment doesnt need local.get because we use tee before.
+          // Every following passive segment uses local.get
+          if (firstPSegHandled) {
+            // summing the size of segments does not work due to possible alignment.
+            // Instead, subtract their original (absolute) startVAs
+            // looking at Writer::layoutMemory, we can assume that "segments" is ordered by their startVAs, so we simply subtract the previous startVA
+            // otherwise, we'd have to do some preprocessing
+            const uint64_t relOffs = s->startVA - lastPSegStartVA;
+
+            writeU8(os, WASM_OPCODE_LOCAL_GET, "local.get");
+            writeUleb128(os, 0, "local index");
+            writePtrConst(os, relOffs, is64, "section offset");
+            writeU8(os, is64 ? WASM_OPCODE_I64_ADD : WASM_OPCODE_I32_ADD, "i32.add");
+          } else {
+            firstPSegHandled = true;
+          }
+        } else {
+          writePtrConst(os, s->startVA, is64, "destination address");
+        }
+        
         if (ctx.isPic) {
           writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
           writeUleb128(os, ctx.sym.memoryBase->getGlobalIndex(),
@@ -1356,13 +1421,14 @@ void Writer::createInitMemoryFunction() {
           writeUleb128(os, WASM_OPCODE_MEMORY_FILL, "memory.fill");
           writeU8(os, 0, "memory index immediate");
         } else {
-          writeI32Const(os, 0, "source segment offset");
-          writeI32Const(os, s->size, "memory region size");
-          writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix");
+          writeI32Const(os, 0, "source segment offset"); // e.g. offset into the data segment
+          writeI32Const(os, s->size, "memory region size"); // e.g. number of bytes to copy
+          writeU8(os, WASM_OPCODE_MISC_PREFIX, "bulk-memory prefix"); // kind of opcode namespace identifier
           writeUleb128(os, WASM_OPCODE_MEMORY_INIT, "memory.init");
-          writeUleb128(os, s->index, "segment index immediate");
-          writeU8(os, 0, "memory index immediate");
+          writeUleb128(os, s->index, "segment index immediate"); // segment identifier/ name
+          writeU8(os, 0, "memory index immediate"); // memory index
         }
+        lastPSegStartVA = s->startVA;
       }
     }
 
@@ -1412,6 +1478,14 @@ void Writer::createInitMemoryFunction() {
         writeUleb128(os, WASM_OPCODE_DATA_DROP, "data.drop");
         writeUleb128(os, s->index, "segment index immediate");
       }
+    }
+
+    if (ctx.arg.waslr) {
+      // save location of data
+      writeU8(os, WASM_OPCODE_LOCAL_GET, "local.get");
+      writeUleb128(os, 0, "local index");
+      writeU8(os, WASM_OPCODE_GLOBAL_SET, "GLOBAL_SET");
+      writeUleb128(os, ctx.sym.wDataBase->getGlobalIndex(),"__wdata_base");
     }
 
     // End the function
@@ -1712,7 +1786,7 @@ void Writer::run() {
   log("-- createSyntheticSections");
   createSyntheticSections();
   log("-- layoutMemory");
-  layoutMemory();
+  layoutMemory(); // CALCULATES offsets for data sections, etc.
 
   if (!ctx.arg.relocatable) {
     // Create linker synthesized __start_SECNAME/__stop_SECNAME symbols
@@ -1741,7 +1815,7 @@ void Writer::run() {
   }
 
   log("-- populateTargetFeatures");
-  populateTargetFeatures();
+  populateTargetFeatures(); // uninteresting
 
   // When outputting PIC code each segment lives at at fixes offset from the
   // `__memory_base` import.  Unless we support the extended const expression we
@@ -1755,13 +1829,13 @@ void Writer::run() {
   }
 
   log("-- createSyntheticSectionsPostLayout");
-  createSyntheticSectionsPostLayout();
+  createSyntheticSectionsPostLayout(); // uninteresting
   log("-- populateProducers");
-  populateProducers();
+  populateProducers(); // uninteresting
   log("-- calculateImports");
-  calculateImports();
+  calculateImports(); // uninteresting
   log("-- scanRelocations");
-  scanRelocations();
+  scanRelocations(); // interesting, and functions do contain the RO strings in their relocations, but it only adds some to the GOT (not the strings ofc)
   log("-- finalizeIndirectFunctionTable");
   finalizeIndirectFunctionTable();
   log("-- createSyntheticInitFunctions");

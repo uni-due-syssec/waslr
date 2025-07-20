@@ -866,6 +866,12 @@ def AlignMac68k : InheritableAttr {
   let Documentation = [InternalOnly];
 }
 
+def WASLRNoRand : InheritableAttr {
+  let Spellings = [GNU<"waslr_no_rand">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+}
+
 def AlignNatural : InheritableAttr {
   // This attribute has no spellings as it is only ever created implicitly.
   let Spellings = [];

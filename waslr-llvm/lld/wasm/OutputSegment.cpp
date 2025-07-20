@@ -21,6 +21,7 @@ void OutputSegment::addInputSegment(InputChunk *inSeg) {
   alignment = std::max(alignment, inSeg->alignment);
   inputSegments.push_back(inSeg);
   size = llvm::alignTo(size, 1ULL << inSeg->alignment);
+
   LLVM_DEBUG(dbgs() << "addInputSegment: " << inSeg->name << " oname=" << name
                     << " size=" << inSeg->getSize()
                     << " align=" << inSeg->alignment << " at:" << size << "\n");

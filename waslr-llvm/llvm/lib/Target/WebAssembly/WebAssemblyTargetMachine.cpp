@@ -576,6 +576,8 @@ void WebAssemblyPassConfig::addPostRegAlloc() {
 void WebAssemblyPassConfig::addPreEmitPass() {
   TargetPassConfig::addPreEmitPass();
 
+  // Can probably put this here, but may move it closer to the end
+  //addPass(createWebAssemblyWASLR());
   // Nullify DBG_VALUE_LISTs that we cannot handle.
   addPass(createWebAssemblyNullifyDebugValueLists());
 
