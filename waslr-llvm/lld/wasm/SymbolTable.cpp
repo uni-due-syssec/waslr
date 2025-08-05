@@ -319,6 +319,15 @@ static bool shouldReplace(const Symbol *existing, InputFile *newFile,
   // Neither symbol is week. They conflict.
   if (ctx.arg.allowMultipleDefinition)
     return false;
+  
+  // ensure that walloc.c is seen first by the linker
+  // if we cant, check the filename here aswell
+  // filename at this point is like /tmp/<filename>-<hash>.o
+  // i think if we rename walloc to something like waslr, it is unique enough to get away with just checking if the filename contains "waslr" instead of having to parse it
+  if (existing->getName() == "malloc" || existing->getName() == "free") {
+    //llvm::outs() << "Preventing replace of " << existing->getName() << "\n";
+    return false;
+  }
 
   errorOrWarn("duplicate symbol: " + toString(*existing) + "\n>>> defined in " +
               toString(existing->getFile()) + "\n>>> defined in " +

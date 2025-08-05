@@ -1368,7 +1368,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   
   if (ctx.arg.waslr) {
     // make sure required functions are available
-    for (const char *name : {"rfree", "ralloc", "__waslr_init"}) {
+    for (const char *name : {"free", "malloc", "__waslr_init"}) {
       Symbol *sym = symtab->find(name);
       if (!sym || sym->isUndefined())
         error(Twine("WASLR is enabled, but required symbol '") + name + "' is missing.");

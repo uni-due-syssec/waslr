@@ -549,6 +549,8 @@ void ExportSection::writeBody() {
     writeExport(os, export_);
 }
 
+// If needed we could force the linker to always set a specific function as start function
+// currently, since we just modify __wasm_init_memory, it is automatically set as the start function
 bool StartSection::isNeeded() const { return ctx.sym.startFunction != nullptr; }
 
 void StartSection::writeBody() {

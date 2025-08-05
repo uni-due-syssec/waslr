@@ -47,6 +47,8 @@ public:
   void emitOrigEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const;
   void emitRandPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const;
   void emitRandEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const;
+  void emitAllocPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const;
+  void emitAllocEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const;
   
   bool hasReservedCallFrame(const MachineFunction &MF) const override;
   bool isSupportedStackID(TargetStackID::Value ID) const override;
