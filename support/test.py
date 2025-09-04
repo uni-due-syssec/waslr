@@ -1,4 +1,4 @@
-FIRST_USABLE_PAGE = 1
+FIRST_USABLE_PAGE = 2
 
 # one page less so that group size is 256 
 # 255 pages = 255 chunks on header page 
@@ -28,7 +28,7 @@ def test_chunk_offset(hpage_idx, chunk_idx, expect_chunk):
 
 def test_get_headerpage_index_256(ptr):
     my_page_idx = ptr>>16
-    my_header_page_idx = (my_page_idx - FIRST_USABLE_PAGE) // 257 
+    my_header_page_idx = (my_page_idx - FIRST_USABLE_PAGE) // 256 
     my_headerpage_pageidx = FIRST_USABLE_PAGE + my_header_page_idx * (PAGES_PER_HEADER+1)
     # 2 -> 1; 257 -> 256 ; 259 -> 258; 771 -> 770
     print(f"MY PAGE: {my_page_idx}; HEADER: {my_header_page_idx}; HEADER GLOBAL: {my_headerpage_pageidx}")
@@ -59,8 +59,36 @@ def test_total_hpages():
         page_ptr = global_page_idx << 16
         print(f"GLOB PAGE PTR: ", page_ptr)
 
+def test_should_swap(header_array_idx, max_index, start_at_hpage, expect_swap):
+    array = [0,1,2]
+    total_hpages_to_search = max_index+1 
+    sel_header_idx = array[header_array_idx]
+    check = max_index != (header_array_idx - start_at_hpage)
+    if check == expect_swap:
+        print(f"Correct! ({max_index} != {header_array_idx - start_at_hpage}) == {check}")
+    else:
+        print(f"Wrong! ({max_index} != {header_array_idx - start_at_hpage}) == {check}")
+    print("Alternatives:")
+    #check2 = max_index != (header_array_idx - total_hpages_to_search)
+    check2 = header_array_idx != max_index
+    #check3 = max_index != (sel_header_idx - total_hpages_to_search)
+    print(f"- Check2: {("Correct" if check2 == expect_swap else "Wrong!")}")
+    #print(f"- ({max_index} != {header_array_idx- total_hpages_to_search}) == {check2}\n")
+    #print(f"- {check3 == expect_swap}")
+    # Check 3 needs array state 
 
 if __name__ == "__main__":
+    test_get_headerpage_index_256(20000000)
+    test_get_headerpage_index_256(1000000)
+    #test_should_swap(1, 2, 0, True)
+    #test_should_swap(0, 1, 0, True)
+    #test_should_swap(0, 0, 0, False)
+    #test_should_swap(1, 1, 0, False)
+
+    #test_should_swap(0, 1, 2, True)
+    #test_should_swap(1, 1, 2, False)
+
+    #test_should_swap(0, 0, 2, False)
     #chunk_start = test_chunk_offset(0, 10, 522)
     #chunk_start2 = test_chunk_offset(0, 65279, 66047)
     #chunk_start3 = test_chunk_offset(1, 0, 66048)
@@ -71,7 +99,7 @@ if __name__ == "__main__":
     #test_get_headerpage_index_255(chunk_start2)
     #test_get_headerpage_index_255(chunk_start3)
     #test_get_headerpage_index_255(chunk_start4)
-    test_total_hpages()
+    #test_total_hpages()
     # (256-1) = 255 % 256 = 255 => correct
     # (257-2) = 255 % 256 = 255 => wrong, should be 0 
     # (258-2) = 256 % 256 = 0 => wrong, should be 1
