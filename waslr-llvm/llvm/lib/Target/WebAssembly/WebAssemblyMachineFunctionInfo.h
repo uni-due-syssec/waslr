@@ -65,7 +65,9 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // Local holding the pointer to the allocated Stack frame
   // FrameBase stores the end of the Stack frame, but we need the start
   // To ensure that the FrameBase Ptr works as it was intended we do not modify its behavior and instead add our own Register that stores the beginning of the Stack Frame
-  unsigned RSFPtrVreg = -1U;
+  unsigned SFPtrVreg = -1U;
+
+  bool forcePrologueEpilogue = false;
 
   // Function properties.
   bool CFGStackified = false;
@@ -94,6 +96,14 @@ public:
     Results.clear();
   }
 
+  bool getForcePrologueEpilogue() const {
+    return forcePrologueEpilogue;
+  }
+
+  void setForcePrologueEpilogue(bool shouldForce) {
+    forcePrologueEpilogue = shouldForce;
+  }
+
   void setNumLocals(size_t NumLocals) { Locals.resize(NumLocals, MVT::i32); }
   void setLocal(size_t i, MVT VT) { Locals[i] = VT; }
   void addLocal(MVT VT) { Locals.push_back(VT); }
@@ -106,12 +116,13 @@ public:
   void setVarargBufferVreg(unsigned Reg) { VarargVreg = Reg; }
 
   unsigned getBasePointerVreg() const {
-    assert(BasePtrVreg != -1U && "Base ptr vreg hasn't been set");
+    //assert(BasePtrVreg != -1U && "Base ptr vreg hasn't been set");
     return BasePtrVreg;
   }
-  unsigned getRSFPointerVreg() const {
-    assert(RSFPtrVreg != -1U && "Random SF Pointer vreg hasn't been set");
-    return RSFPtrVreg;
+  unsigned getSFPointerVreg() const {
+    // we want this to return -1U if it hasnt been set!
+    //assert(SFPtrVreg != -1U && "Random SF Pointer vreg hasn't been set");
+    return SFPtrVreg;
   }
   void setFrameBaseVreg(unsigned Reg) { FrameBaseVreg = Reg; }
   unsigned getFrameBaseVreg() const {
@@ -127,7 +138,7 @@ public:
     return FrameBaseLocal;
   }
   void setBasePointerVreg(unsigned Reg) { BasePtrVreg = Reg; }
-  void setRSFPointerVreg(unsigned Reg) { RSFPtrVreg = Reg; }
+  void setSFPointerVreg(unsigned Reg) { SFPtrVreg = Reg; }
 
   void stackifyVReg(MachineRegisterInfo &MRI, Register VReg) {
     assert(MRI.getUniqueVRegDef(VReg));

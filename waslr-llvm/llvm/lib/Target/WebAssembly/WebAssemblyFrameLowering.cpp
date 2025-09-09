@@ -298,8 +298,14 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
   assert(MFI.getCalleeSavedInfo().empty() &&
          "WebAssembly should not have callee-saved registers");
 
-  if (!needsSP(MF))
+  auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
+  if (MF.getName() == "malloc" || MF.getName() == "free") {
+    FI->setForcePrologueEpilogue(true);   
+  }
+
+  if (!needsSP(MF) && !FI->getForcePrologueEpilogue()){
     return;
+  }
   uint64_t StackSize = MFI.getStackSize();
 
   auto &ST = MF.getSubtarget<WebAssemblySubtarget>();
@@ -334,18 +340,21 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
     DL,
   };
 
-
+  bool isRand = false;
   if (waslrEnabled) {
     if (MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)){
       if(MF.getName() == "malloc" || MF.getName() == "free")
         emitAllocPrologue(MF, MBB, Ctx);
-      else
+      else 
         emitOrigPrologue(MF, MBB, Ctx);
-    } else 
+    } else {
+      isRand = true;
       emitRandPrologue(MF, MBB, Ctx);
-  } else 
+    }
+  } else
     emitOrigPrologue(MF, MBB, Ctx);
 
+  // we always use the base pointer, but hasBP just checks if the stack pointer needs alignment
   if (hasBP(MF)) {
     Register BitmaskReg = MRI.createVirtualRegister(PtrRC);
     Align Alignment = MFI.getMaxAlign();
@@ -355,30 +364,31 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
         .addReg(getSPReg(MF))
         .addReg(BitmaskReg);
   }
-  if (hasFP(MF)) {
+
+  // in general, our prologues/epilogues NEVER need a frame pointer since we use the base pointer to restore the previous stack pointer
+  // we only use the FP in the rand case, since we need the start of the allocated frame to call free in the epilogue
+  if (isRand || (!isRand && hasFP(MF))) {
     // Unlike most conventional targets (where FP points to the saved FP),
     // FP points to the bottom of the fixed-size locals, so we can use positive
     // offsets in load/store instructions.
     BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), getFPReg(MF))
         .addReg(getSPReg(MF));
   }
-  if (StackSize && needsSPWriteback(MF)) {
+  if ((StackSize && needsSPWriteback(MF)) || FI->getForcePrologueEpilogue()) {
+    //unsigned SFVreg = FI->getSFPointerVreg();
+    //unsigned writebackSrcReg = SFVreg == -1U ? getSPReg(MF) : SFVreg;
     writeSPToGlobal(getSPReg(MF), MF, MBB, InsertPt, DL);
   }
 }
 
-/*
-  Plan:
-  - Remove original epilogue
-  - Replace by:
-    1) setSP(base pointer)
-    2) free(ptr) //from prologue
-*/
 void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
                                             MachineBasicBlock &MBB) const {
   uint64_t StackSize = MF.getFrameInfo().getStackSize();
-  if (!needsSP(MF) || !needsSPWriteback(MF))
+  auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
+
+  if ((!needsSP(MF) || !needsSPWriteback(MF)) && !FI->getForcePrologueEpilogue()){
     return;
+  }
   auto &ST = MF.getSubtarget<WebAssemblySubtarget>();
   const auto *TII = ST.getInstrInfo();
   auto &MRI = MF.getRegInfo();
@@ -392,7 +402,6 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   // Restore the stack pointer. If we had fixed-size locals, add the offset
   // subtracted in the prolog.
   unsigned SPReg = 0;
-  unsigned SPFPReg = hasFP(MF) ? getFPReg(MF) : getSPReg(MF);
   const TargetRegisterClass *PtrRC = MRI.getTargetRegisterInfo()->getPointerRegClass(MF);
 
   const WasmPEContext Ctx {
@@ -408,13 +417,13 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   if (waslrEnabled) {
     if (MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)){
       if(MF.getName() == "malloc" || MF.getName() == "free")
-        emitAllocEpilogue(MF, MBB, Ctx, SPFPReg);
+        emitAllocEpilogue(MF, MBB, Ctx);
       else
-        emitOrigEpilogue(MF, MBB, Ctx, SPFPReg);
+        emitOrigEpilogue(MF, MBB, Ctx);
     } else 
-      emitRandEpilogue(MF, MBB, Ctx, SPFPReg);
+      emitRandEpilogue(MF, MBB, Ctx);
   } else 
-    emitOrigEpilogue(MF, MBB, Ctx, SPFPReg);
+    emitOrigEpilogue(MF, MBB, Ctx);
 }
 
 void WebAssemblyFrameLowering::emitOrigPrologue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
@@ -426,8 +435,7 @@ void WebAssemblyFrameLowering::emitOrigPrologue(MachineFunction &MF, MachineBasi
   auto StackSize = Ctx.SFSize;
   auto DL = Ctx.DL;
 
-  bool HasBP = hasBP(MF);
-  if (HasBP) {
+  if (hasBP(MF)) {
     auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
     Register BasePtr = MRI.createVirtualRegister(PtrRC);
 	// BasePtr = LOCAL GET SPReg 
@@ -450,7 +458,7 @@ void WebAssemblyFrameLowering::emitOrigPrologue(MachineFunction &MF, MachineBasi
   }
 }
 
-void WebAssemblyFrameLowering::emitOrigEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const {
+void WebAssemblyFrameLowering::emitOrigEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
   auto *PtrRC = Ctx.PtrRC;
   auto InsertPt = Ctx.InsertPt;
   auto *TII = Ctx.TII;
@@ -458,6 +466,8 @@ void WebAssemblyFrameLowering::emitOrigEpilogue(MachineFunction &MF, MachineBasi
   auto SPReg = Ctx.SPRegister;
   auto StackSize = Ctx.SFSize;
   auto DL = Ctx.DL;
+
+  unsigned SPFPReg = hasFP(MF) ? getFPReg(MF) : getSPReg(MF);
 
   if (hasBP(MF)) {
     auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
@@ -503,10 +513,10 @@ void WebAssemblyFrameLowering::emitRandPrologue(MachineFunction &MF, MachineBasi
   if (StackSize){
     // get pointer to random allocation of SFSize bytes
     // SFPtr = getRandomChunk(SF_Size)
-    Register SFPtr = MRI.createVirtualRegister(PtrRC);
+    //Register SFPtrReg = MRI.createVirtualRegister(PtrRC);
     Register SFSizeReg = MRI.createVirtualRegister(PtrRC);
     // Save Register for Epilogue
-    FI->setRSFPointerVreg(SFPtr);
+    //FI->setSFPointerVreg(SFPtrReg);
 
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SFSizeReg)
       .addImm(StackSize);
@@ -518,19 +528,22 @@ void WebAssemblyFrameLowering::emitRandPrologue(MachineFunction &MF, MachineBasi
     setFunctionSignature(AllocFn, MF.getContext(), params, results);
 
     BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::CALL))
-      .addDef(SFPtr)
+      .addDef(getSPReg(MF))
       .addSym(AllocFn)
       .addReg(SFSizeReg);
 
+    /*BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), getSPReg(MF))
+      .addReg(getFPReg(MF));*/
+
     // Since we plan to use ralloc for both Stack and Heap, we cannot return a pointer to the END of the chunk by default
     // Instead, we subtract SFSize from the returned pointer
-    BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
-      .addReg(SFPtr)
-      .addReg(SFSizeReg);
+    /*BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
+      .addReg(SFPtrReg)
+      .addReg(SFSizeReg);*/
   }
 }
 
-void WebAssemblyFrameLowering::emitRandEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const {
+void WebAssemblyFrameLowering::emitRandEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
   auto InsertPt = Ctx.InsertPt;
   auto *TII = Ctx.TII;
   auto SPReg = Ctx.SPRegister;
@@ -539,15 +552,10 @@ void WebAssemblyFrameLowering::emitRandEpilogue(MachineFunction &MF, MachineBasi
   auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
   
   // We always want to restore the original SP from the BP
-  if (hasBP(MF) || StackSize) {
-    SPReg = FI->getBasePointerVreg();
-  } else {
-    SPReg = SPFPReg;
-  }
+  SPReg = FI->getBasePointerVreg();
   writeSPToGlobal(SPReg, MF, MBB, InsertPt, DL);
   // free the space allocated for the stack
   if (StackSize) {
-    unsigned RSFPtrReg = FI->getRSFPointerVreg();
     MCSymbolWasm *FreeFn = cast<MCSymbolWasm>(MF.getContext().getOrCreateSymbol("free"));
     wasm::ValType VT = getIValueType(MF);
     SmallVector<wasm::ValType, 1> params = {VT};
@@ -555,7 +563,7 @@ void WebAssemblyFrameLowering::emitRandEpilogue(MachineFunction &MF, MachineBasi
 
     BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::CALL))
       .addSym(FreeFn)
-      .addReg(RSFPtrReg);
+      .addReg(getFPReg(MF));
   }
 }
 
@@ -568,6 +576,13 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
   auto StackSize = Ctx.SFSize;
   auto DL = Ctx.DL;
 
+  // the first page remains untouched, the second is for manual allocations like these.
+  // The memory that is used for regular allocation requests starts on page 3.
+  // reserve ~8000 bytes for allocator stack frames
+  // Maybe TODO: if we can use the entire page for allocator Stack frames only, we know there will be no stack frames once a malloc/free call is finished.
+  //            Therefore we could just generate a random number between page3_start and page3_end and set the stack frame to start there
+  int64_t allocStackframeStart = 74000;
+  
   // Instead of only using the BasePtr when required, we use always use it to store the previous Stack Pointer
   // Advantage: We can access the same Register in the Epilogue without further effort
   // Otherwise: Modify WebAssemblyMachineFunctionInfo and add a new field to store "our" Base Pointer
@@ -595,22 +610,23 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcSub(MF)), getSPReg(MF))
         .addReg(SPTargetReg)
         .addReg(OffsetReg);
+  } else {
+    Register SPTargetReg = MRI.createVirtualRegister(PtrRC);
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
+        .addImm(allocStackframeStart);
+    BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), getSPReg(MF)).addReg(SPTargetReg);
+    //FI->setSFPointerVreg(SPTargetReg);
   }
 }
 
-void WebAssemblyFrameLowering::emitAllocEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx, unsigned SPFPReg) const {
+void WebAssemblyFrameLowering::emitAllocEpilogue(MachineFunction &MF, MachineBasicBlock &MBB, const WasmPEContext &Ctx) const {
   auto InsertPt = Ctx.InsertPt;
   auto SPReg = Ctx.SPRegister;
-  auto StackSize = Ctx.SFSize;
   auto DL = Ctx.DL;
   auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
   
   // We always want to restore the original SP from the BP
-  if (hasBP(MF) || StackSize) {
-    SPReg = FI->getBasePointerVreg();
-  } else {
-    SPReg = SPFPReg;
-  }
+  SPReg = FI->getBasePointerVreg();
   writeSPToGlobal(SPReg, MF, MBB, InsertPt, DL);
 }
 
