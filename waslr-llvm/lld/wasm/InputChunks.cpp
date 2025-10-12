@@ -382,6 +382,10 @@ uint64_t InputChunk::getVA(uint64_t offset) const {
   return (outputSeg ? outputSeg->startVA : 0) + getChunkOffset(offset);
 }
 
+uint64_t InputChunk::getVAold(uint64_t offset) const {
+  return (outputSeg ? outputSeg->startVA : 0) + getChunkOffset(offset);
+}
+
 // Generate code to apply relocations to the data section at runtime.
 // This is only called when generating shared libraries (PIC) where address are
 // not known at static link time.
@@ -405,7 +409,7 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
     Symbol *sym = file->getSymbol(rel);
     // Runtime relocations are needed when we don't know the address of
     // a symbol statically.
-    bool requiresRuntimeReloc = ctx.isPic || sym->hasGOTIndex();
+    bool requiresRuntimeReloc = ctx.arg.waslr || ctx.isPic || sym->hasGOTIndex();
     if (!requiresRuntimeReloc)
       continue;
 
@@ -424,6 +428,10 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
         writeUleb128(os, ctx.sym.tlsBase->getGlobalIndex(), "tls_base");
       else
         writeUleb128(os, ctx.sym.memoryBase->getGlobalIndex(), "memory_base");
+      writeU8(os, opcode_ptr_add, "ADD");
+    } else if (ctx.arg.waslr) {
+      writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+      writeUleb128(os, ctx.sym.wDataBase->getGlobalIndex(), "wdata_base");
       writeU8(os, opcode_ptr_add, "ADD");
     }
 
@@ -445,18 +453,33 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
         writeU8(os, opcode_reloc_add, "ADD");
       }
     } else {
-      assert(ctx.isPic);
-      const GlobalSymbol *baseSymbol = ctx.sym.memoryBase; // Interesting part
-      if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
-          rel.Type == R_WASM_TABLE_INDEX_I64)
-        baseSymbol = ctx.sym.tableBase;
-      else if (sym->isTLS())
-        baseSymbol = ctx.sym.tlsBase;
-      writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
-      writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
-      writeU8(os, opcode_reloc_const, "CONST");
-      writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
-      writeU8(os, opcode_reloc_add, "ADD");
+      if (ctx.arg.waslr) {
+        const GlobalSymbol *baseSymbol = ctx.sym.wDataBase; // Interesting part
+        // waslr should not generate relocations for functions but still leave that in here for now
+        if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
+            rel.Type == R_WASM_TABLE_INDEX_I64)
+          baseSymbol = ctx.sym.tableBase;
+        else if (sym->isTLS())
+          baseSymbol = ctx.sym.tlsBase;
+        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+        writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
+        writeU8(os, opcode_reloc_const, "CONST");
+        writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
+        writeU8(os, opcode_reloc_add, "ADD");
+      } else {
+        assert(ctx.isPic);
+        const GlobalSymbol *baseSymbol = ctx.sym.memoryBase; // Interesting part
+        if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
+            rel.Type == R_WASM_TABLE_INDEX_I64)
+          baseSymbol = ctx.sym.tableBase;
+        else if (sym->isTLS())
+          baseSymbol = ctx.sym.tlsBase;
+        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+        writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
+        writeU8(os, opcode_reloc_const, "CONST");
+        writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
+        writeU8(os, opcode_reloc_add, "ADD");
+      }
     }
 
     // Store that value at the virtual address

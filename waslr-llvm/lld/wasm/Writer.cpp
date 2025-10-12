@@ -76,6 +76,7 @@ private:
   void createCommandExportWrappers();
   void createCommandExportWrapper(uint32_t functionIndex, DefinedFunction *f);
 
+  void preAssignWDataBase();
   void assignIndexes();
   void populateSymtab();
   void populateProducers();
@@ -955,10 +956,22 @@ static void scanRelocations() {
   }
 }
 
+void Writer::preAssignWDataBase() {
+  // It seems that we can seal it at this point already.
+  out.importSec->seal();
+  for (InputGlobal *global : ctx.syntheticGlobals){
+    if (global->getName() == "__wdata_base"){
+      uint32_t imports = out.importSec->getNumImportedGlobals();
+      global->assignIndex(imports);
+    }
+    llvm::outs () << "preassigned: " << global->getName() << "\n";
+  }
+}
+
 void Writer::assignIndexes() {
   // Seal the import section, since other index spaces such as function and
   // global are effected by the number of imports.
-  out.importSec->seal();
+  
 
   for (InputFunction *func : ctx.syntheticFunctions)
     out.functionSec->addFunction(func);
@@ -969,8 +982,11 @@ void Writer::assignIndexes() {
       out.functionSec->addFunction(func);
   }
 
-  for (InputGlobal *global : ctx.syntheticGlobals)
+  // These are Wasm globals
+  for (InputGlobal *global : ctx.syntheticGlobals){
+    llvm::outs () << "add synth global: " << global->getName() << "\n";
     out.globalSec->addGlobal(global);
+  }
 
   for (ObjFile *file : ctx.objectFiles) {
     LLVM_DEBUG(dbgs() << "Globals: " << file->getName() << "\n");
@@ -1040,6 +1056,7 @@ void Writer::createOutputSegments() {
       if (ctx.arg.relocatable && !segment->getComdatName().empty()) {
         s = createOutputSegment(name);
       } else {
+        // prevent reusing same outputsegment for inputsegments with same name?
         if (segmentMap.count(name) == 0)
           segmentMap[name] = createOutputSegment(name);
         s = segmentMap[name];
@@ -1078,7 +1095,7 @@ void Writer::combineOutputSegments() {
   // This restriction does not apply when the extended const extension is
   // available: https://github.com/WebAssembly/extended-const
   assert(!ctx.arg.extendedConst);
-  assert(ctx.isPic && !ctx.arg.sharedMemory);
+  assert(ctx.arg.waslr || (ctx.isPic && !ctx.arg.sharedMemory));
   if (segments.size() <= 1)
     return;
   OutputSegment *combined = make<OutputSegment>(".data");
@@ -1090,17 +1107,18 @@ void Writer::combineOutputSegments() {
         inSeg->alignment = std::max(inSeg->alignment, s->alignment);
       first = false;
 #ifndef NDEBUG
-      uint64_t oldVA = inSeg->getVA();
+      uint64_t oldVA = inSeg->getVAold();
 #endif
       combined->addInputSegment(inSeg);
 #ifndef NDEBUG
-      uint64_t newVA = inSeg->getVA();
+      uint64_t newVA = inSeg->getVAold();
       LLVM_DEBUG(dbgs() << "added input segment. name=" << inSeg->name
                         << " oldVA=" << oldVA << " newVA=" << newVA << "\n");
       assert(oldVA == newVA);
 #endif
     }
   }
+  combined->initFlags = WASM_DATA_SEGMENT_IS_PASSIVE;
 
   segments = {combined};
 }
@@ -1314,9 +1332,15 @@ void Writer::createInitMemoryFunction() {
       // Initialize passive data segments
       writeU8(os, WASM_OPCODE_END, "end $init");
     } else {
-      writeUleb128(os, 1, "num local decls"); // x local groups total
-      writeUleb128(os, 1, "local count"); // 1 local in this group
-      writeU8(os, WASM_TYPE_I32, "local type"); // type i32
+      if (ctx.arg.waslr) {
+        writeUleb128(os, 1, "num local decls"); // x local groups total
+        writeUleb128(os, 2, "local count"); // 1 local in this group
+        writeU8(os, WASM_TYPE_I32, "local type"); // type i32
+      } else {
+        writeUleb128(os, 1, "num local decls"); 
+        writeUleb128(os, 1, "local count"); 
+        writeU8(os, WASM_TYPE_I32, "local type"); 
+      }
     }
 
     if (ctx.arg.waslr) {
@@ -1360,7 +1384,8 @@ void Writer::createInitMemoryFunction() {
     }
 
 
-    bool firstPSegHandled = false;
+    //bool firstPSegHandled = false;
+    uint64_t pSegsHandled = 0;
     uint64_t lastPSegStartVA = 0;
 
     for (const OutputSegment *s : segments) {
@@ -1369,20 +1394,24 @@ void Writer::createInitMemoryFunction() {
           // dataSecOffsSum > 0 => atleast one passive segment has been handled already
           // the first passive segment doesnt need local.get because we use tee before.
           // Every following passive segment uses local.get
-          if (firstPSegHandled) {
+          if (pSegsHandled > 0) {
             // summing the size of segments does not work due to possible alignment.
             // Instead, subtract their original (absolute) startVAs
             // looking at Writer::layoutMemory, we can assume that "segments" is ordered by their startVAs, so we simply subtract the previous startVA
             // otherwise, we'd have to do some preprocessing
             const uint64_t relOffs = s->startVA - lastPSegStartVA;
+            // the first segment can use the unmodified malloc return value as destination, but every segment after that needs to use <malloc_return> + <size_of_previous_segments> as the destination offset
+            const uint64_t destinationReg = pSegsHandled > 1 ? 1 : 0;
 
             writeU8(os, WASM_OPCODE_LOCAL_GET, "local.get");
-            writeUleb128(os, 0, "local index");
+            writeUleb128(os, destinationReg, "local index");
             writePtrConst(os, relOffs, is64, "section offset");
             writeU8(os, is64 ? WASM_OPCODE_I64_ADD : WASM_OPCODE_I32_ADD, "i32.add");
-          } else {
-            firstPSegHandled = true;
-          }
+            writeU8(os, WASM_OPCODE_LOCAL_TEE, "local.tee");
+            writeUleb128(os, 1, "local 1");
+          } 
+          pSegsHandled++;
+          
         } else {
           writePtrConst(os, s->startVA, is64, "destination address");
         }
@@ -1486,6 +1515,17 @@ void Writer::createInitMemoryFunction() {
       writeUleb128(os, 0, "local index");
       writeU8(os, WASM_OPCODE_GLOBAL_SET, "GLOBAL_SET");
       writeUleb128(os, ctx.sym.wDataBase->getGlobalIndex(),"__wdata_base");
+
+      //call __wasm_apply_data_relocs. 
+      // Unsure if we need to call this here, since it is exported and can be called from the host after instantiation
+      // If WASI modules dont automatically call it, leave it here
+      const FunctionSymbol *data_relocs = nullptr;
+      data_relocs = dyn_cast_or_null<FunctionSymbol>(symtab->find("__wasm_apply_data_relocs"));
+    
+      if (data_relocs && data_relocs->hasFunctionIndex()) {
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, data_relocs->getFunctionIndex(), "function index");
+      }
     }
 
     // End the function
@@ -1526,17 +1566,24 @@ void Writer::createStartFunction() {
 void Writer::createApplyDataRelocationsFunction() {
   LLVM_DEBUG(dbgs() << "createApplyDataRelocationsFunction\n");
   // First write the body's contents to a string.
+  llvm::outs() << "RELOC A\n";
   std::string bodyContent;
   {
     raw_string_ostream os(bodyContent);
     writeUleb128(os, 0, "num locals");
     bool generated = false;
-    for (const OutputSegment *seg : segments)
-      if (!ctx.arg.sharedMemory || !seg->isTLS())
-        for (const InputChunk *inSeg : seg->inputSegments)
+    for (const OutputSegment *seg : segments) {
+      llvm::outs() << "RELOC B" << seg->name << "\n";
+      if (!ctx.arg.sharedMemory || !seg->isTLS()) {
+        for (const InputChunk *inSeg : seg->inputSegments) {
+          llvm::outs() << "RELOC C" << inSeg->name << "\n";
           generated |= inSeg->generateRelocationCode(os);
+        }
+      }
+    }
 
     if (!generated) {
+      llvm::outs() << "RELOC D\n";
       LLVM_DEBUG(dbgs() << "skipping empty __wasm_apply_data_relocs\n");
       return;
     }
@@ -1821,11 +1868,11 @@ void Writer::run() {
   // `__memory_base` import.  Unless we support the extended const expression we
   // can't do addition inside the constant expression, so we much combine the
   // segments into a single one that can live at `__memory_base`.
-  if (ctx.isPic && !ctx.arg.extendedConst && !ctx.arg.sharedMemory) {
+  if (ctx.arg.waslr || (ctx.isPic && !ctx.arg.extendedConst && !ctx.arg.sharedMemory)) {
     // In shared memory mode all data segments are passive and initialized
     // via __wasm_init_memory.
     log("-- combineOutputSegments");
-    combineOutputSegments();
+    combineOutputSegments(); // maybe interesting if we want all data segments to be combined
   }
 
   log("-- createSyntheticSectionsPostLayout");
@@ -1839,6 +1886,7 @@ void Writer::run() {
   log("-- finalizeIndirectFunctionTable");
   finalizeIndirectFunctionTable();
   log("-- createSyntheticInitFunctions");
+  preAssignWDataBase(); // need to assign an index to our synthetic global "__wdata_base" before creating apply_data_relocs function in next step
   createSyntheticInitFunctions();
   log("-- assignIndexes");
   assignIndexes();

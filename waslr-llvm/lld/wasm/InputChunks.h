@@ -71,6 +71,7 @@ public:
   // return unmodified offset.
   uint64_t getChunkOffset(uint64_t offset) const;
   uint64_t getVA(uint64_t offset = 0) const;
+  uint64_t getVAold(uint64_t offset = 0) const;
 
   uint32_t getComdat() const { return comdat; }
   StringRef getComdatName() const;

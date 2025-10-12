@@ -1961,16 +1961,22 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
           DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT, GA->getOffset(),
                                      OperandFlags));
 
+      //llvm::outs() << "REL: " << GV->getName() << "\n";
       return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
     }
+    //llvm::outs() << "GOT: " << GV->getName() << "\n";
     OperandFlags = WebAssemblyII::MO_GOT;
   }
 
   if (waslrEnabled) {
+    //llvm::outs() << "GLOBAL: " << GV->getName() << "\n";
     if (!WebAssembly::isWebAssemblyTableType(GV->getValueType())){
+      //llvm::outs() << "A: " << GV->getName() << "\n";
       if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
-        // Identify static data
-        if (GVar->hasInitializer() && GVar->isConstant()) {
+        //llvm::outs() << "B: " << GV->getName() << "\n";
+        if (!GVar->isDeclaration()) {
+        //if (GVar->hasInitializer() && GVar->isConstant()) {
+          //llvm::outs() << "C: " << GV->getName() << "\n";
           if (getTargetMachine().shouldAssumeDSOLocal(GV)) {
             MachineFunction &MF = DAG.getMachineFunction();
             MVT PtrVT = getPointerTy(MF.getDataLayout());
@@ -1988,6 +1994,7 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
     }
   }
 
+  //llvm::outs() << "NOT HANDLED: " << GV->getName() << "\n";
   // Only reached by some of the default wasm globals (and functions when compiling without PIC)
   return DAG.getNode(WebAssemblyISD::Wrapper, DL, VT,
                      DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,

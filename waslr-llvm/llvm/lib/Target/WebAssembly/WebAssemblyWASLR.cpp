@@ -1,8 +1,11 @@
 // Result of testing, just keep in case we need it
 
 #include "WebAssembly.h"
+#include "WebAssemblyMachineFunctionInfo.h"
 #include "WebAssemblySubtarget.h"
+#include "WebAssemblyUtilities.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasm-waslr"
@@ -35,18 +38,21 @@ bool WebAssemblyWASLR::runOnMachineFunction(
                        "********** Function: "
                     << MF.getName() << '\n');
   bool Changed = false;
-  // Our backend, including WebAssemblyDebugValueManager, currently cannot
-  // handle DBG_VALUE_LISTs correctly. So this makes them undefined, which will
-  // appear as "optimized out".
-  llvm::outs() << "Running WASLR Pass!\n";
-  /**for (auto &MBB : MF) {
+  if (!MF.getFrameInfo().hasVarSizedObjects()) {
+    return Changed;
+  }
+  llvm::outs() << "Function: " << MF.getName() << " has VSOs\n";
+  for (auto &MBB : MF) {
     for (auto &MI : MBB) {
-      if (MI.getOpcode() == TargetOpcode::DBG_VALUE_LIST) {
-        MI.setDebugValueUndef();
-        Changed = true;
+      if ((MI.getOpcode() == WebAssembly::GLOBAL_SET_I32 ||
+       MI.getOpcode() == WebAssembly::GLOBAL_SET_I64) &&
+      strcmp(MI.getOperand(0).getSymbolName(), "__stack_pointer") == 0) {
+        llvm::outs() << "Found Stack Pointer Update\n";
       }
     }
-  }**/
+  }
    
   return Changed;
 }
+
+// Look at WebAssemblyRegStackify for good examples

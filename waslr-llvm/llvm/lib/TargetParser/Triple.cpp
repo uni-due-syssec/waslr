@@ -1731,8 +1731,10 @@ unsigned Triple::getTrampolineSize() const {
   return 32;
 }
 
+// when building wasi libc, for some reason the triple is null for one file. Since we intend to provide a prebuilt libc, we dont debug this and just return false
 bool Triple::isArch64Bit() const {
-  return getArchPointerBitWidth(getArch()) == 64;
+  return false;
+  //return getArchPointerBitWidth(getArch()) == 64;
 }
 
 bool Triple::isArch32Bit() const {

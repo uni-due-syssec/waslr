@@ -324,8 +324,8 @@ static bool shouldReplace(const Symbol *existing, InputFile *newFile,
   // if we cant, check the filename here aswell
   // filename at this point is like /tmp/<filename>-<hash>.o
   // i think if we rename walloc to something like waslr, it is unique enough to get away with just checking if the filename contains "waslr" instead of having to parse it
-  if (existing->getName() == "malloc" || existing->getName() == "free") {
-    //llvm::outs() << "Preventing replace of " << existing->getName() << "\n";
+  if (existing->getName() == "malloc" || existing->getName() == "calloc" || existing->getName() == "free") {
+    //llvm::outs() << "Preventing replace of " << existing->getName() << "; FILE: " << existing->getFile()->getName() << "; NEWFILE: " << newFile->getName() << "\n";
     return false;
   }
 

@@ -1,10 +1,18 @@
 #include "waslr.h"
 
 #define SMALL_OBJECT_RANDOM_CHUNKS 4
-#define INITIAL_PAGES_ALLOC = 10 
+#define INITIAL_PAGES_ALLOC 10 
 #define MINIMUM_NEW_PAGES 128
 // 0: unused, 1: for manual allocations (e.g. waslr stackframes)
 #define FIRST_USABLE_PAGE_IDX 2
+
+// easy way to ensure that SO freelist lives at a specific offset
+// without having to implement custom lowering in llvm
+#define SO_FREELIST_START 75000
+#define NUM_KINDS 10
+#define LIST_SIZE (NUM_KINDS * sizeof(struct freelist *)) 
+#define MAP_LOCATION_END (MAP_LOCATION_START + LIST_SIZE - 1)
+#define small_object_freelists ((struct freelist **)(SO_FREELIST_START))
 
 // functions with this attribute will use the original prologue/epilogue
 #define NO_WASLR __attribute__((waslr_no_rand,noinline))
@@ -34,8 +42,6 @@ static inline uintptr_t align(uintptr_t val, uintptr_t alignment) {
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
-#define MEMORY_START 1024
-
 #define CHUNK_SIZE 256
 #define CHUNK_SIZE_LOG_2 8
 #define CHUNK_MASK (CHUNK_SIZE - 1)
@@ -64,7 +70,8 @@ struct chunk {
 
 #define FOR_EACH_SMALL_OBJECT_GRANULES(M) \
   M(1) M(2) M(4) M(8) M(16) M(32)
-//  M(1) M(2) M(3) M(4) M(5) M(6) M(8) M(10) M(16) M(32)
+  //M(1) M(2) M(3) M(4) M(5) M(6) M(8) M(10) M(16) M(32)
+  
 enum chunk_kind {
   FREE_CHUNK,
 #define DEFINE_SMALL_OBJECT_CHUNK_KIND(i) GRANULES_##i,
@@ -93,13 +100,6 @@ NO_WASLR static enum chunk_kind granules_to_chunk_kind(unsigned granules) {
 NO_WASLR static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
   if (kind == 0) return 0;
   return 1U << (kind-1);
-/*  switch (kind) {
-#define CHUNK_KIND_GRANULE_SIZE(i) case GRANULES_##i: return i;
-  FOR_EACH_SMALL_OBJECT_GRANULES(CHUNK_KIND_GRANULE_SIZE);
-#undef CHUNK_KIND_GRANULE_SIZE
-    default:
-      return -1;
-  }*/
 }
 
 // these are all not needed as they will always have the same value as other already defined variables
@@ -112,6 +112,8 @@ NO_WASLR static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
 #define PAGES_PER_GROUP (DATA_PAGES_PER_GROUP + 1) // or CHUNK_SIZE, but this is more readable
 #define PAGES_PER_GROUP_MASK (PAGES_PER_GROUP - 1) // also the same as CHUNK_MASK
 #define PAGE_GROUP_SIZE_MASK ((PAGES_PER_GROUP << PAGE_SIZE_LOG_2) - 1)
+
+#define MAX_ALLOC_SIZE (PAGES_PER_GROUP * PAGE_SIZE)
 
 struct header_page {
     uint8_t meta[PAGE_HEADER_SIZE]; // currently unused
@@ -141,7 +143,7 @@ struct freelist {
     struct freelist *next;
 };
 
-static struct freelist *small_object_freelists[SMALL_OBJECT_CHUNK_KINDS];
+//static struct freelist *small_object_freelists[SMALL_OBJECT_CHUNK_KINDS];
 
 struct search_result {
   size_t chunks_left;
@@ -157,7 +159,6 @@ NO_WASLR size_t grow_wasm_memory(size_t numPages){
 }
 
 NO_WASLR static void allocate_chunks(struct header_page *page, unsigned idx, enum chunk_kind kind, size_t num_chunks) {
-  debug_early(idx);
   size_t offset = idx;
   size_t i = 0;
   if(kind == LARGE_OBJECT) {
@@ -168,13 +169,9 @@ NO_WASLR static void allocate_chunks(struct header_page *page, unsigned idx, enu
   for (; i<num_chunks; i++) {
     offset = idx + i;
     uint8_t current = page->headers[offset];
-    if (current!=FREE_CHUNK){
-      debug_early(111111111);
-      debug_early(current);
-      debug_early(kind);
-      debug_early(offset);
-      debug_early(222222222);
-    }
+    /*if (current!=FREE_CHUNK){
+      alloc_error((uintptr_t)page, idx, current, kind);
+    }*/
     page->headers[offset] = kind;
   }
 }
@@ -186,16 +183,15 @@ NO_WASLR static void free_consecutive_chunks(struct header_page *page, unsigned 
 
   while(idx+offset < (HEADERS_TOTAL_SIZE-1) && page->headers[idx+offset] == kind) {
     page->headers[idx+offset] = FREE_CHUNK;
-    console_uintptr("REL CHUNK IDX: ", (uintptr_t)(idx+offset));
+    //console_uintptr("REL CHUNK IDX: ", (uintptr_t)(idx+offset));
     offset += 1;
   }
-  console_uintptr("FREED SIZE:", offset*256);
+  //console_uintptr("FREED SIZE:", offset*256);
 }
 
 NO_WASLR static size_t allocate_pages(size_t payload_size) {
   // grow memory atleast by MINIMUM_NEW_PAGES pages, or by enough pages to store the payload size * 4, whichever is larger
   size_t pages_to_alloc = max(MINIMUM_NEW_PAGES, align(payload_size << 2, PAGE_SIZE) >> PAGE_SIZE_LOG_2);
-
   if (!grow_wasm_memory(pages_to_alloc)) {
     return 0;
   }
@@ -203,7 +199,7 @@ NO_WASLR static size_t allocate_pages(size_t payload_size) {
   return pages_to_alloc;
 }
 
-void fisher_yates_shuffle(size_t *array, size_t size) {
+static void fisher_yates_shuffle(size_t *array, size_t size) {
   for (size_t i = size - 1; i > 0; i--) {
     size_t j = rand() % (i + 1);
     size_t temp = array[i];
@@ -216,8 +212,7 @@ void fisher_yates_shuffle(size_t *array, size_t size) {
 // TODO: Change export to used when no longer needed for testing
 NO_WASLR void WASM_EXPORT(__waslr_init)(unsigned int seed) {
   srand(seed);
-  grow_wasm_memory(10);
-  debug_early(1);
+  grow_wasm_memory(100);
 }
 
 NO_WASLR static inline size_t size_to_granules(size_t size) {
@@ -300,8 +295,8 @@ NO_WASLR static struct search_result find_free_chunks(size_t *found_chunks, size
     page_groups[i] = start_at_group + i;
   }
 
-  debug_early(555555);
-  debug_early((uintptr_t)&page_groups);
+  ////debug_early(555555);
+  ////debug_early((uintptr_t)&page_groups);
   size_t chunks_left = num_picks;
   while (chunks_left > 0) {
     // the index of the header page within all header pages
@@ -358,8 +353,6 @@ NO_WASLR static struct search_result find_free_chunks(size_t *found_chunks, size
     } 
 
     // found a free chunk
-    debug_early(999);
-    debug_early((uintptr_t)headerpage);
     chunks_left--;
     // save the pointer to the chunk
     found_chunks[chunks_left] = (((global_headerpage_idx+1) << CHUNKS_PER_PAGE_LOG2) + found_chunk_idx) << CHUNK_SIZE_LOG_2;
@@ -417,7 +410,7 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
 }
 
 NO_WASLR static void* allocate_small(enum chunk_kind kind) {
-  debug_early(6661);
+  //debug_early(6661);
     struct freelist **loc = get_small_object_freelist(kind);
     if (!*loc) {
         // freelist empty
@@ -427,16 +420,19 @@ NO_WASLR static void* allocate_small(enum chunk_kind kind) {
         }
         *loc = freelist;
     }
+
     struct freelist *ret = *loc;
     *loc = ret->next;
     //console_uintptr("SO Pointer: ", (uintptr_t)ret);
+    //debug_early((uintptr_t)ret);
+    //debug_early(6662);
+    debug_early(12);
     debug_early((uintptr_t)ret);
-    debug_early(6662);
     return (void *) ret;
 }
 
 NO_WASLR static void* allocate_large(size_t size) {
-  debug_early(7771);
+  //debug_early(7771);
   size_t size_in_chunks = (size + CHUNK_MASK) >> CHUNK_SIZE_LOG_2;
   size_t found_chunks[1]; // array of size 1 so we do not need extra handling in find_free_chunks
   struct search_result res = find_free_chunks(found_chunks, size_in_chunks, 1, LARGE_OBJECT, 0);
@@ -456,12 +452,30 @@ NO_WASLR static void* allocate_large(size_t size) {
   }
   // we have a pointer to "size_in_chunks" consecutive chunks at index 0 of found_chunks
   //console_uintptr("LO Pointer: ", (uintptr_t)found_chunks[0]);
-  debug_early((uintptr_t)found_chunks[0]);
-  debug_early(7772);
+  //debug_early((uintptr_t)found_chunks[0]);
+  //debug_early(7772);
+  debug_early(11);
+  debug_early(found_chunks[0]);
   return (void*) found_chunks[0];
 }
 
+NO_WASLR NO_INLINE void* WASM_EXPORT(calloc)(size_t num, size_t size) {
+    debug_early(999);
+    size_t total_size = num*size;
+
+    void* ptr = malloc(total_size);
+    if(!ptr) return NULL;
+
+    uint8_t* bptr = (uint8_t*)ptr;
+    for(size_t i=0; i<total_size; i++) {
+      bptr[i] = 0;
+    }
+    return ptr;
+}
+
 NO_WASLR NO_INLINE void* WASM_EXPORT(malloc)(size_t size) {
+    debug_early(1);
+    // TODO: need to assert max allocation size here?
     size_t granules = size_to_granules(size);
     enum chunk_kind kind = granules_to_chunk_kind(granules);
     //console_uintptr("ALLOC SIZE:", (uintptr_t) size);
@@ -469,10 +483,12 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(malloc)(size_t size) {
 }
 
 NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
+  debug_early(2);
+  debug_early((uintptr_t)ptr);
   if (!ptr) return;
   // get header page for pointer
   struct header_page *headerpage = get_headerpage(ptr);
-  console("FREE");
+  //console("FREE");
   console_uintptr("HEADERPAGE: ", (uintptr_t)headerpage);
   // get header byte that represents the ptr's chunk
   unsigned chunk = get_header_chunk_index(headerpage, ptr);
@@ -480,10 +496,10 @@ NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
 
   uint8_t kind = headerpage->headers[chunk];
   if (kind == LARGE_OBJECT_START) {
-    console("FREE LARGE OBJECT");
+    //console("FREE LARGE OBJECT");
     free_consecutive_chunks(headerpage, chunk, LARGE_OBJECT);
   } else {
-    console_uintptr("FREE SMALL OBJECT KIND", kind);
+    //console_uintptr("FREE SMALL OBJECT KIND", kind);
     // freed object is put at the front of the freelist
     // TODO: Check if it is necessary to randomize this too
     struct freelist **loc = get_small_object_freelist(kind);
@@ -491,4 +507,5 @@ NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
     obj->next = *loc;
     *loc = obj;
   } 
+  debug_early(5);
 }

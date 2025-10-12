@@ -67,7 +67,8 @@ class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   // To ensure that the FrameBase Ptr works as it was intended we do not modify its behavior and instead add our own Register that stores the beginning of the Stack Frame
   unsigned SFPtrVreg = -1U;
 
-  bool forcePrologueEpilogue = false;
+  // only set and used during Frame Lowering
+  bool _isAllocFn = false;
 
   // Function properties.
   bool CFGStackified = false;
@@ -96,12 +97,12 @@ public:
     Results.clear();
   }
 
-  bool getForcePrologueEpilogue() const {
-    return forcePrologueEpilogue;
+  bool isAllocFn() const {
+    return _isAllocFn;
   }
 
-  void setForcePrologueEpilogue(bool shouldForce) {
-    forcePrologueEpilogue = shouldForce;
+  void setIsAllocFn(bool isAllocFn) {
+    _isAllocFn = isAllocFn;
   }
 
   void setNumLocals(size_t NumLocals) { Locals.resize(NumLocals, MVT::i32); }

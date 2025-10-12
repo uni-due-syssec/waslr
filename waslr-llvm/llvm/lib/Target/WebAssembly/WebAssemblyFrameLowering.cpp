@@ -300,10 +300,10 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
 
   auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
   if (MF.getName() == "malloc" || MF.getName() == "free") {
-    FI->setForcePrologueEpilogue(true);   
+    FI->setIsAllocFn(true);   
   }
 
-  if (!needsSP(MF) && !FI->getForcePrologueEpilogue()){
+  if (!needsSP(MF) && !FI->isAllocFn()){
     return;
   }
   uint64_t StackSize = MFI.getStackSize();
@@ -343,7 +343,7 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
   bool isRand = false;
   if (waslrEnabled) {
     if (MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)){
-      if(MF.getName() == "malloc" || MF.getName() == "free")
+      if(FI->isAllocFn())
         emitAllocPrologue(MF, MBB, Ctx);
       else 
         emitOrigPrologue(MF, MBB, Ctx);
@@ -374,7 +374,7 @@ void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
     BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), getFPReg(MF))
         .addReg(getSPReg(MF));
   }
-  if ((StackSize && needsSPWriteback(MF)) || FI->getForcePrologueEpilogue()) {
+  if ((StackSize && needsSPWriteback(MF)) || FI->isAllocFn()) {
     //unsigned SFVreg = FI->getSFPointerVreg();
     //unsigned writebackSrcReg = SFVreg == -1U ? getSPReg(MF) : SFVreg;
     writeSPToGlobal(getSPReg(MF), MF, MBB, InsertPt, DL);
@@ -386,7 +386,7 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
   uint64_t StackSize = MF.getFrameInfo().getStackSize();
   auto FI = MF.getInfo<WebAssemblyFunctionInfo>();
 
-  if ((!needsSP(MF) || !needsSPWriteback(MF)) && !FI->getForcePrologueEpilogue()){
+  if ((!needsSP(MF) || !needsSPWriteback(MF)) && !FI->isAllocFn()){
     return;
   }
   auto &ST = MF.getSubtarget<WebAssemblySubtarget>();
@@ -416,7 +416,7 @@ void WebAssemblyFrameLowering::emitEpilogue(MachineFunction &MF,
 
   if (waslrEnabled) {
     if (MF.getFunction().hasFnAttribute(llvm::Attribute::WASLRNoRand)){
-      if(MF.getName() == "malloc" || MF.getName() == "free")
+      if(FI->isAllocFn())
         emitAllocEpilogue(MF, MBB, Ctx);
       else
         emitOrigEpilogue(MF, MBB, Ctx);
@@ -599,7 +599,7 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
     // set Stack Pointer to predefined region (we use 8000 and below, should be more than enough for the malloc/free stack frames)
     Register SPTargetReg = MRI.createVirtualRegister(PtrRC);
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
-        .addImm(8000);
+        .addImm(allocStackframeStart);
       
 	  // Create Register to hold the constant Stack Size
     Register OffsetReg = MRI.createVirtualRegister(PtrRC);

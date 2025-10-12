@@ -387,8 +387,20 @@ void TagSection::addTag(InputTag *tag) {
 
 void GlobalSection::assignIndexes() {
   uint32_t globalIndex = out.importSec->getNumImportedGlobals();
-  for (InputGlobal *g : inputGlobals)
+  
+  // currently we only preassign __wdata_base, but for more flexibility we do it dynamic
+  uint32_t numPreAssignedGlobals = 0;
+  for (InputGlobal *g : inputGlobals) {
+    if (g->hasAssignedIndex()) numPreAssignedGlobals++;
+  }
+  globalIndex += numPreAssignedGlobals;
+
+  for (InputGlobal *g : inputGlobals) {
+    // so we can preassign index to wdatabase
+    if(g->hasAssignedIndex()) continue; 
+
     g->assignIndex(globalIndex++);
+  }
   for (Symbol *sym : internalGotSymbols)
     sym->setGOTIndex(globalIndex++);
   isSealed = true;
