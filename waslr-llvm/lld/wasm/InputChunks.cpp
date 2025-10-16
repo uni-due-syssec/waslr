@@ -455,7 +455,6 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
     } else {
       if (ctx.arg.waslr) {
         const GlobalSymbol *baseSymbol = ctx.sym.wDataBase; // Interesting part
-        // waslr should not generate relocations for functions but still leave that in here for now
         if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
             rel.Type == R_WASM_TABLE_INDEX_I64)
           baseSymbol = ctx.sym.tableBase;

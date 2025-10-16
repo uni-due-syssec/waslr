@@ -964,7 +964,6 @@ void Writer::preAssignWDataBase() {
       uint32_t imports = out.importSec->getNumImportedGlobals();
       global->assignIndex(imports);
     }
-    llvm::outs () << "preassigned: " << global->getName() << "\n";
   }
 }
 
@@ -984,7 +983,6 @@ void Writer::assignIndexes() {
 
   // These are Wasm globals
   for (InputGlobal *global : ctx.syntheticGlobals){
-    llvm::outs () << "add synth global: " << global->getName() << "\n";
     out.globalSec->addGlobal(global);
   }
 
@@ -1118,7 +1116,9 @@ void Writer::combineOutputSegments() {
 #endif
     }
   }
-  combined->initFlags = WASM_DATA_SEGMENT_IS_PASSIVE;
+  if (ctx.arg.waslr) {
+    combined->initFlags = WASM_DATA_SEGMENT_IS_PASSIVE;
+  }
 
   segments = {combined};
 }
@@ -1199,7 +1199,7 @@ void Writer::createSyntheticInitFunctions() {
     }
   }
 
-  if (ctx.isPic && out.globalSec->needsRelocations()) {
+  if ((ctx.arg.waslr || ctx.isPic) && out.globalSec->needsRelocations()) {
     ctx.sym.applyGlobalRelocs = symtab->addSyntheticFunction(
         "__wasm_apply_global_relocs", WASM_SYMBOL_VISIBILITY_HIDDEN,
         make<SyntheticFunction>(nullSignature, "__wasm_apply_global_relocs"));
@@ -1209,7 +1209,7 @@ void Writer::createSyntheticInitFunctions() {
   // If there is only one start function we can just use that function
   // itself as the Wasm start function, otherwise we need to synthesize
   // a new function to call them in sequence.
-  if (ctx.sym.applyGlobalRelocs && ctx.sym.initMemory) {
+  if (!ctx.arg.waslr && ctx.sym.applyGlobalRelocs && ctx.sym.initMemory) {
     ctx.sym.startFunction = symtab->addSyntheticFunction(
         "__wasm_start", WASM_SYMBOL_VISIBILITY_HIDDEN,
         make<SyntheticFunction>(nullSignature, "__wasm_start"));
@@ -1520,11 +1520,19 @@ void Writer::createInitMemoryFunction() {
       // Unsure if we need to call this here, since it is exported and can be called from the host after instantiation
       // If WASI modules dont automatically call it, leave it here
       const FunctionSymbol *data_relocs = nullptr;
+      const FunctionSymbol *global_relocs = nullptr;
       data_relocs = dyn_cast_or_null<FunctionSymbol>(symtab->find("__wasm_apply_data_relocs"));
+      global_relocs = dyn_cast_or_null<FunctionSymbol>(symtab->find("__wasm_apply_global_relocs"));
+
     
       if (data_relocs && data_relocs->hasFunctionIndex()) {
         writeU8(os, WASM_OPCODE_CALL, "CALL");
         writeUleb128(os, data_relocs->getFunctionIndex(), "function index");
+      }
+
+      if (global_relocs && global_relocs->hasFunctionIndex()) {
+        writeU8(os, WASM_OPCODE_CALL, "CALL");
+        writeUleb128(os, global_relocs->getFunctionIndex(), "function index");
       }
     }
 
@@ -1537,7 +1545,7 @@ void Writer::createInitMemoryFunction() {
 
 void Writer::createStartFunction() {
   // If the start function exists when we have more than one function to call.
-  if (ctx.sym.initMemory && ctx.sym.applyGlobalRelocs) {
+  if (!ctx.arg.waslr && ctx.sym.initMemory && ctx.sym.applyGlobalRelocs) {
     assert(ctx.sym.startFunction);
     std::string bodyContent;
     {
@@ -1566,24 +1574,20 @@ void Writer::createStartFunction() {
 void Writer::createApplyDataRelocationsFunction() {
   LLVM_DEBUG(dbgs() << "createApplyDataRelocationsFunction\n");
   // First write the body's contents to a string.
-  llvm::outs() << "RELOC A\n";
   std::string bodyContent;
   {
     raw_string_ostream os(bodyContent);
     writeUleb128(os, 0, "num locals");
     bool generated = false;
     for (const OutputSegment *seg : segments) {
-      llvm::outs() << "RELOC B" << seg->name << "\n";
       if (!ctx.arg.sharedMemory || !seg->isTLS()) {
         for (const InputChunk *inSeg : seg->inputSegments) {
-          llvm::outs() << "RELOC C" << inSeg->name << "\n";
           generated |= inSeg->generateRelocationCode(os);
         }
       }
     }
 
     if (!generated) {
-      llvm::outs() << "RELOC D\n";
       LLVM_DEBUG(dbgs() << "skipping empty __wasm_apply_data_relocs\n");
       return;
     }

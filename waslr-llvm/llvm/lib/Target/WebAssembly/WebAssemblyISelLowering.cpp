@@ -1946,9 +1946,11 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
       MVT PtrVT = getPointerTy(MF.getDataLayout());
       const char *BaseName;
       if (GV->getValueType()->isFunctionTy()) {
+        llvm::outs() << "FUNC GLOBAL" << GV->getName() << "\n";
         BaseName = MF.createExternalSymbolName("__table_base");
         OperandFlags = WebAssemblyII::MO_TABLE_BASE_REL;
       } else {
+        llvm::outs() << "DATA GLOBAL" << GV->getName() << "\n";
         BaseName = MF.createExternalSymbolName("__memory_base");
         OperandFlags = WebAssemblyII::MO_MEMORY_BASE_REL;
       }
@@ -1961,41 +1963,51 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
           DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT, GA->getOffset(),
                                      OperandFlags));
 
-      //llvm::outs() << "REL: " << GV->getName() << "\n";
       return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
     }
-    //llvm::outs() << "GOT: " << GV->getName() << "\n";
     OperandFlags = WebAssemblyII::MO_GOT;
+    llvm::outs() << "GOT GLOBAL" << GV->getName() << "\n";
   }
 
+  // Wrapper2 and WrapperREL2 are just copies of the original Wrapper and WrapperREL that generate code similar to PIC when waslr is enabled
+  // - defined in WebAssemblyInstrInfo.td
   if (waslrEnabled) {
-    //llvm::outs() << "GLOBAL: " << GV->getName() << "\n";
     if (!WebAssembly::isWebAssemblyTableType(GV->getValueType())){
-      //llvm::outs() << "A: " << GV->getName() << "\n";
-      if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
-        //llvm::outs() << "B: " << GV->getName() << "\n";
-        if (!GVar->isDeclaration()) {
+      //if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
+        //if (!GVar->isDeclaration()) {
         //if (GVar->hasInitializer() && GVar->isConstant()) {
-          //llvm::outs() << "C: " << GV->getName() << "\n";
-          if (getTargetMachine().shouldAssumeDSOLocal(GV)) {
-            MachineFunction &MF = DAG.getMachineFunction();
-            MVT PtrVT = getPointerTy(MF.getDataLayout());
-            const char *BaseName = MF.createExternalSymbolName("__wdata_base");
-            OperandFlags = WebAssemblyII::MO_MEMORY_BASE_REL;
-            SDValue BaseAddr = DAG.getNode(WebAssemblyISD::Wrapper2, DL, PtrVT,
-                            DAG.getTargetExternalSymbol(BaseName, PtrVT));
-            SDValue SymAddr = DAG.getNode(WebAssemblyISD::WrapperREL2, DL, VT,
-                DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT, GA->getOffset(),
-                                          OperandFlags));
-            return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
+          if (!GV->getValueType()->isFunctionTy()) {
+            if (getTargetMachine().shouldAssumeDSOLocal(GV)) {
+              MachineFunction &MF = DAG.getMachineFunction();
+              MVT PtrVT = getPointerTy(MF.getDataLayout());
+
+              const char* BaseName = MF.createExternalSymbolName("__wdata_base");
+              OperandFlags = WebAssemblyII::MO_MEMORY_BASE_REL;
+              SDValue BaseAddr = DAG.getNode(WebAssemblyISD::Wrapper2, DL, PtrVT,
+                              DAG.getTargetExternalSymbol(BaseName, PtrVT));
+              SDValue SymAddr = DAG.getNode(WebAssemblyISD::WrapperREL2, DL, VT,
+                  DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT, GA->getOffset(),
+                                            OperandFlags));
+              return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
+            }
+        
+            OperandFlags = WebAssemblyII::MO_GOT;
+            return DAG.getNode(WebAssemblyISD::Wrapper2, DL, VT,
+                     DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,
+                                                GA->getOffset(), OperandFlags));
+          } else {
+            // function pointer globals
+            // since (indirect) function calls use tables outside of linear memory, we do not need to randomize anything and can use the default Wrapper
+            return DAG.getNode(WebAssemblyISD::Wrapper, DL, VT,
+                     DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,
+                                                GA->getOffset(), OperandFlags));
           }
-        }
-      }
+        //}
+      //}
     }
   }
 
-  //llvm::outs() << "NOT HANDLED: " << GV->getName() << "\n";
-  // Only reached by some of the default wasm globals (and functions when compiling without PIC)
+  // default lowering without pic / waslr
   return DAG.getNode(WebAssemblyISD::Wrapper, DL, VT,
                      DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,
                                                 GA->getOffset(), OperandFlags));

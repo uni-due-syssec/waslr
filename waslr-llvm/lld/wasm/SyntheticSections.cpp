@@ -444,7 +444,10 @@ void GlobalSection::generateRelocationCode(raw_ostream &os, bool TLS) const {
       if (sym->isTLS())
         writeUleb128(os, ctx.sym.tlsBase->getGlobalIndex(), "__tls_base");
       else
-        writeUleb128(os, ctx.sym.memoryBase->getGlobalIndex(), "__memory_base");
+        if (ctx.arg.waslr)
+          writeUleb128(os, ctx.sym.wDataBase->getGlobalIndex(), "__wdata_base");
+        else
+          writeUleb128(os, ctx.sym.memoryBase->getGlobalIndex(), "__memory_base");
 
       // Add the virtual address of the data symbol
       writeU8(os, opcode_ptr_const, "CONST");
@@ -485,7 +488,7 @@ void GlobalSection::writeBody() {
       // In the case of dynamic linking, unless we have 'extended-const'
       // available, these global must to be mutable since they get updated to
       // the correct runtime value during `__wasm_apply_global_relocs`.
-      if (!ctx.arg.extendedConst && ctx.isPic && !sym->isTLS())
+      if (!ctx.arg.extendedConst && (ctx.isPic || ctx.arg.waslr) && !sym->isTLS())
         mutable_ = true;
       // With multi-theadeding any TLS globals must be mutable since they get
       // set during `__wasm_apply_global_tls_relocs`
