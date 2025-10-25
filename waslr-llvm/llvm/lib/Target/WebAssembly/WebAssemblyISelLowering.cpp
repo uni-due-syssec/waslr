@@ -1941,6 +1941,7 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
   // need special treatment for tables in PIC mode.
   if (isPositionIndependent() &&
       !WebAssembly::isWebAssemblyTableType(GV->getValueType())) {
+    assert(false && "Reached PIE ISEL?!?!?!");
     if (getTargetMachine().shouldAssumeDSOLocal(GV)) {
       MachineFunction &MF = DAG.getMachineFunction();
       MVT PtrVT = getPointerTy(MF.getDataLayout());
@@ -1990,7 +1991,7 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
                                             OperandFlags));
               return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
             }
-        
+
             OperandFlags = WebAssemblyII::MO_GOT;
             return DAG.getNode(WebAssemblyISD::Wrapper2, DL, VT,
                      DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,

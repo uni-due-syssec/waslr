@@ -455,16 +455,30 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
     } else {
       if (ctx.arg.waslr) {
         const GlobalSymbol *baseSymbol = ctx.sym.wDataBase; // Interesting part
+        bool globalRel = true;
+        llvm::outs () << "A\n";
         if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
-            rel.Type == R_WASM_TABLE_INDEX_I64)
-          baseSymbol = ctx.sym.tableBase;
-        else if (sym->isTLS())
+            rel.Type == R_WASM_TABLE_INDEX_I64) {
+              llvm::outs () << "B\n";
+              llvm::outs () << "FILE:" << file->getName() << "\n";
+              llvm::outs () << "SYM: " << sym->getName() << "\n";
+              //baseSymbol = ctx.sym.tableBase;
+              globalRel = false;
+            }
+        else if (sym->isTLS()) {
+          llvm::outs () << "C\n";
           baseSymbol = ctx.sym.tlsBase;
-        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
-        writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
-        writeU8(os, opcode_reloc_const, "CONST");
-        writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
-        writeU8(os, opcode_reloc_add, "ADD");
+        }
+        if (globalRel) {
+          writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+          writeUleb128(os, baseSymbol->getGlobalIndex(), "base");
+          writeU8(os, opcode_reloc_const, "CONST");
+          writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
+          writeU8(os, opcode_reloc_add, "ADD");
+        } else {
+          writeU8(os, opcode_reloc_const, "CONST");
+          writeSleb128(os, file->calcNewValue(rel, tombstone, this), "offset");
+        }
       } else {
         assert(ctx.isPic);
         const GlobalSymbol *baseSymbol = ctx.sym.memoryBase; // Interesting part

@@ -314,6 +314,7 @@ uint64_t DefinedData::getOutputSegmentIndex() const {
 }
 
 uint32_t GlobalSymbol::getGlobalIndex() const {
+  //llvm::outs() << "GET INDEX: " << this->getName() << "\n";
   if (auto *f = dyn_cast<DefinedGlobal>(this))
     return f->global->getAssignedIndex();
   assert(globalIndex != INVALID_INDEX);
