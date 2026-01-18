@@ -13,7 +13,7 @@ TBA
 
 2. Build libclang_rt.builtins-wasm32.a
 - waslr-llvm/build-compiler-rt.sh 
-- copy into ?
+- copy into waslr-llvm/build/lib/clang/20/lib/wasi
 
 3. Build wasi libc
 - support/wasi-libc/build.sh
@@ -28,12 +28,15 @@ TBA
 ## Limitations
 - VLA
 - max allocation size (depends on chunk size)
+    - 256 byte chunk size: 255 data pages (16711680 bytes)
+    - 512 byte chunk size: 511 data pages (33488896 bytes)
+    - ...
 - ...TBA
 
 ## TODO 
 
 ### Cleanup
-- Replace llvm and wasi libc with git submodules and only keep changed files in this repo
+- Optional: Replace llvm and wasi libc with git submodules and only keep changed files in this repo
     - setup: copy changes into the cloned original
 
 - After testing:
@@ -51,6 +54,8 @@ TBA
         - for an allocation that requires N chunks, we currently write N bytes into the header, where the first byte is an identifier for the start of a LO
         - we could use the next 2 bytes after the identifier to record the LO size
     - this change would not affect the number of writes necessary to update headers, but the number of read operations to check the headerpage (in case of allocations/frees)
+    - but this would raise the min. number of chunks for a large object from 2 to 4 (start byte + 2 bytes for size + end byte)
+
 - improved check when growing memory
     - we grow memory if no headerpage can fit the allocation
     - we search the last headerpage again, if some of the new memory is managed by it 

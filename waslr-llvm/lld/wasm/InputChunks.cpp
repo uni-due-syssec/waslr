@@ -456,17 +456,12 @@ bool InputChunk::generateRelocationCode(raw_ostream &os) const {
       if (ctx.arg.waslr) {
         const GlobalSymbol *baseSymbol = ctx.sym.wDataBase; // Interesting part
         bool globalRel = true;
-        llvm::outs () << "A\n";
         if (rel.Type == R_WASM_TABLE_INDEX_I32 ||
             rel.Type == R_WASM_TABLE_INDEX_I64) {
-              llvm::outs () << "B\n";
-              llvm::outs () << "FILE:" << file->getName() << "\n";
-              llvm::outs () << "SYM: " << sym->getName() << "\n";
               //baseSymbol = ctx.sym.tableBase;
               globalRel = false;
             }
         else if (sym->isTLS()) {
-          llvm::outs () << "C\n";
           baseSymbol = ctx.sym.tlsBase;
         }
         if (globalRel) {

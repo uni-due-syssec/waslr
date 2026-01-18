@@ -44,8 +44,8 @@ static inline uintptr_t align(uintptr_t val, uintptr_t alignment) {
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
-#define CHUNK_SIZE 256
-#define CHUNK_SIZE_LOG_2 8
+#define CHUNK_SIZE 512
+#define CHUNK_SIZE_LOG_2 9
 #define CHUNK_MASK (CHUNK_SIZE - 1)
 STATIC_ASSERT_EQ(CHUNK_SIZE, 1 << CHUNK_SIZE_LOG_2);
 
@@ -59,19 +59,13 @@ STATIC_ASSERT_EQ(0, PAGE_SIZE % CHUNK_SIZE);
 
 #define GRANULE_SIZE 8
 #define GRANULE_SIZE_LOG_2 3
-#define LARGE_OBJECT_THRESHOLD 256
-#define LARGE_OBJECT_GRANULE_THRESHOLD 32
-
-STATIC_ASSERT_EQ(GRANULE_SIZE, 1 << GRANULE_SIZE_LOG_2);
-STATIC_ASSERT_EQ(LARGE_OBJECT_THRESHOLD,
-                 LARGE_OBJECT_GRANULE_THRESHOLD * GRANULE_SIZE);
 
 struct chunk {
     char data[CHUNK_SIZE];
 };
 
 #define FOR_EACH_SMALL_OBJECT_GRANULES(M) \
-  M(1) M(2) M(4) M(8) M(16) M(32)
+  M(1) M(2) M(4) M(8) M(16) M(32) M(64)
   //M(1) M(2) M(3) M(4) M(5) M(6) M(8) M(10) M(16) M(32)
   
 enum chunk_kind {
@@ -115,7 +109,7 @@ NO_WASLR static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
 #define PAGES_PER_GROUP_MASK (PAGES_PER_GROUP - 1) // also the same as CHUNK_MASK
 #define PAGE_GROUP_SIZE_MASK ((PAGES_PER_GROUP << PAGE_SIZE_LOG_2) - 1)
 
-#define MAX_ALLOC_SIZE (PAGES_PER_GROUP * PAGE_SIZE)
+#define MAX_ALLOC_SIZE (DATA_PAGES_PER_GROUP * PAGE_SIZE)
 
 struct header_page {
     uint8_t meta[PAGE_HEADER_SIZE]; // currently unused
@@ -220,59 +214,6 @@ NO_WASLR static inline size_t size_to_granules(size_t size) {
 NO_WASLR static struct freelist** get_small_object_freelist(enum chunk_kind kind) {
   ASSERT(kind < SMALL_OBJECT_CHUNK_KINDS);
   return &small_object_freelists[kind];
-}
-
-// for debugging only
-NO_WASLR void check_headerpage(struct header_page* headerpage, size_t size_chunks, size_t start_at_group) {
-  size_t usable_pages = __builtin_wasm_memory_size(0) - FIRST_USABLE_PAGE_IDX;
-  size_t total_groups = ((usable_pages + DATA_PAGES_PER_GROUP) >> PAGE_GROUP_LOG2);
-  size_t total_groups_to_search = total_groups - start_at_group; 
-  // data pages represented by the last header page. -1 for the header page itself
-  size_t last_group_data_pages = (usable_pages - 1) & PAGES_PER_GROUP_MASK;
-
-  size_t selected_group_idx = (((uintptr_t)headerpage / PAGE_SIZE) - 2) / 256;
-  size_t usable_pages_in_group = selected_group_idx == total_groups - 1 ? last_group_data_pages : DATA_PAGES_PER_GROUP;
-
-  size_t max_bytes_to_check = usable_pages_in_group << PAGE_HEADER_LOG2;
-
-  size_t prev_idx = 0;
-  size_t idx = 0;
-  size_t found = 0;
-  size_t free_chunks = 0;
-  size_t non_free_chunks = 0;
-  size_t current = 0; // 0 = free; 1 = not free
-  for (; idx < max_bytes_to_check; idx++) {
-    if (headerpage->headers[idx] == FREE_CHUNK) {
-      if (current == 1) {
-        // switch
-        console_uintptr("NOT FREE COUNT:", found);
-        found = 0;
-        current = 0;
-      }
-      found++;
-      free_chunks++;
-    } else {
-      if (current == 0) {
-        // switch
-        console_uintptr("FREE COUNT:", found);
-        if (found >= size_chunks) {
-          console_uintptr("alloc could fit here size:", size_chunks);
-        }
-        found = 0;
-        current = 1;
-      } 
-      found++;
-      non_free_chunks++;
-    }
-  }
-  if (current == 1) {
-    console_uintptr("NOT FREE COUNT:", found);
-  } else {
-    console_uintptr("FREE COUNT:", found);
-    if (found >= size_chunks) {
-      console_uintptr("alloc could fit here size:", size_chunks);
-    }
-  }
 }
 
 // max return value is 65535 and we also want to return negative values to indicate errors
@@ -390,7 +331,6 @@ NO_WASLR static struct search_result find_free_chunks(size_t *found_chunks, size
     size_t usable_pages_in_group = selected_group_idx == total_groups- 1 ? last_group_data_pages : DATA_PAGES_PER_GROUP;
 
     console_uintptr("--- SEARCHING HP:", (uintptr_t) headerpage);
-    check_headerpage(headerpage, num_chunks, start_at_group);
     int32_t found_chunk_idx = search_headerpage(headerpage, total_groups_to_search, usable_pages_in_group, num_chunks);
 
     if (found_chunk_idx == -1) {
@@ -470,7 +410,7 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
   // we have an array of allocated chunks
   struct freelist *next = NULL;
   size_t size_granules = chunk_kind_to_granules(kind) << GRANULE_SIZE_LOG_2;
-  // Example: GRANULES_1 => 32 x 8 byte ptrs per chunk, 4 different chunks => 128 ptrs total 
+  // Example: GRANULES_1, 256 chunk size => 32 x 8 byte ptrs per chunk, 4 different chunks => 128 ptrs total 
   size_t num_elements_per_chunk = CHUNK_SIZE / size_granules; 
   size_t numElements = num_elements_per_chunk * SMALL_OBJECT_RANDOM_CHUNKS;
 
@@ -548,7 +488,6 @@ NO_WASLR static void* allocate_large(size_t size) {
     debug_early(alloc_end);
   }
   debug_early(22222);
-  //check_headerpage((void*) found_chunks[0]);
   return (void*) found_chunks[0];
 }
 
@@ -568,7 +507,7 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(calloc)(size_t num, size_t size) {
 
 NO_WASLR NO_INLINE void* WASM_EXPORT(malloc)(size_t size) {
     console_uintptr("MALLOC SZ:", size);
-    // TODO: need to assert max allocation size here?
+
     size_t granules = size_to_granules(size);
     enum chunk_kind kind = granules_to_chunk_kind(granules);
     return (kind == LARGE_OBJECT) ? allocate_large(size) : allocate_small(kind);

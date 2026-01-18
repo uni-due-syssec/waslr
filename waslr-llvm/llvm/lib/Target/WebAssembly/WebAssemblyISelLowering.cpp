@@ -1947,11 +1947,9 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
       MVT PtrVT = getPointerTy(MF.getDataLayout());
       const char *BaseName;
       if (GV->getValueType()->isFunctionTy()) {
-        llvm::outs() << "FUNC GLOBAL" << GV->getName() << "\n";
         BaseName = MF.createExternalSymbolName("__table_base");
         OperandFlags = WebAssemblyII::MO_TABLE_BASE_REL;
       } else {
-        llvm::outs() << "DATA GLOBAL" << GV->getName() << "\n";
         BaseName = MF.createExternalSymbolName("__memory_base");
         OperandFlags = WebAssemblyII::MO_MEMORY_BASE_REL;
       }
@@ -1967,7 +1965,6 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
       return DAG.getNode(ISD::ADD, DL, VT, BaseAddr, SymAddr);
     }
     OperandFlags = WebAssemblyII::MO_GOT;
-    llvm::outs() << "GOT GLOBAL" << GV->getName() << "\n";
   }
 
   // Wrapper2 and WrapperREL2 are just copies of the original Wrapper and WrapperREL that generate code similar to PIC when waslr is enabled
