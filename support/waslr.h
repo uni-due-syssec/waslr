@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdlib.h>
 
 #define PAGE_SIZE 65536
 
