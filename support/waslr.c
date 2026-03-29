@@ -38,8 +38,8 @@ static uintptr_t align(uintptr_t val, uintptr_t alignment) {
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
 #define SMALL_OBJECT_RANDOM_CHUNKS 4
-#define HEADERPAGES_PER_GROUP 32
-#define HEADERPAGES_PER_GROUP_LOG2 5
+#define HEADERPAGES_PER_GROUP 2
+#define HEADERPAGES_PER_GROUP_LOG2 1
 #define GROW_MEMORY_MULTIPLIER_LOG_2 1 // when increasing memory, we grow by the number of bytes times a multiplier (power of 2)
 #define INITIAL_PAGES_ALLOC 200
 #define MINIMUM_NEW_PAGES 128
@@ -84,6 +84,7 @@ enum chunk_kind {
 };
 
 #define SEED_ADDR 75000 // freelists from 76000 onwards, allocator stackframes from 74000 downwards
+#define COUNTER 75500
 
 void __srand(unsigned s) {
   *(uint64_t*)SEED_ADDR = s-1;
@@ -122,7 +123,7 @@ NO_WASLR static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
 #define PAGE_HEADER_SIZE (CHUNKS_PER_PAGE * HEADERPAGES_PER_GROUP) 
 #define PAGE_HEADER_LOG2 CHUNKS_PER_PAGE_LOG2
 #define HEADERS_TOTAL_SIZE (PAGE_SIZE * HEADERPAGES_PER_GROUP - PAGE_HEADER_SIZE)
-#define DATA_PAGES_PER_GROUP ((CHUNK_SIZE*HEADERPAGES_PER_GROUP)-HEADERPAGES_PER_GROUP) // - 1 so the group size is always a power of 2
+#define DATA_PAGES_PER_GROUP ((CHUNK_SIZE*HEADERPAGES_PER_GROUP)-HEADERPAGES_PER_GROUP)
 #define PAGE_GROUP_LOG2 (CHUNK_SIZE_LOG_2+HEADERPAGES_PER_GROUP_LOG2)
 #define PAGES_PER_GROUP (DATA_PAGES_PER_GROUP + HEADERPAGES_PER_GROUP) // or CHUNK_SIZE, but this is more readable
 #define PAGES_PER_GROUP_MASK (PAGES_PER_GROUP-1) // also the same as CHUNK_MASK
@@ -140,9 +141,6 @@ struct header_page {
 struct page {
     struct chunk chunks[CHUNKS_PER_PAGE];
 };
-
-#define IS_WITHIN_MEMORY(ptr) \
-  ((uintptr_t)(ptr) < (__builtin_wasm_memory_size(0) * PAGE_SIZE))
 
 NO_WASLR static struct header_page* get_headerpage(void *ptr) {
   size_t headerpage_ptr = (((uintptr_t)ptr - FIRST_USABLE_BYTE) & ~PAGE_GROUP_SIZE_MASK) + FIRST_USABLE_BYTE;
@@ -166,6 +164,9 @@ struct search_result {
   size_t chunks_left;
   size_t next_group_idx;
 };
+
+#define IS_WITHIN_MEMORY(ptr) \
+  ((uintptr_t)(ptr) < (__builtin_wasm_memory_size(0) * PAGE_SIZE))
 
 // currently kind of unnecessary but more readable
 NO_WASLR size_t grow_wasm_memory(size_t numPages){
@@ -197,6 +198,17 @@ NO_WASLR static void allocate_chunks(struct header_page *page, unsigned idx, enu
     uint8_t current = page->headers[offset];
     page->headers[offset] = kind;
   }
+}
+
+NO_WASLR static void check_headerpage() {
+  struct header_page* hp = (struct header_page*) 131072;
+  unsigned chunk_idx = get_header_chunk_index(hp, (void*)1974672);
+  unsigned char value = hp->headers[chunk_idx];
+  debug_early(77777);
+  debug_early(value);
+
+  struct freelist* allocation_check = (struct freelist*)1974672;
+  debug_early((uintptr_t)allocation_check->next);
 }
 
 NO_WASLR static size_t get_allocation_size(void* ptr) {
@@ -231,8 +243,8 @@ NO_WASLR static void free_consecutive_chunks(struct header_page *page, unsigned 
 }
 
 NO_WASLR static size_t allocate_pages(size_t payload_size) {
-  // grow memory atleast by MINIMUM_NEW_PAGES pages, or by enough pages to store the payload size * 4, whichever is larger
-  size_t pages_to_alloc = max(MINIMUM_NEW_PAGES, align(payload_size << GROW_MEMORY_MULTIPLIER_LOG_2, PAGE_SIZE) >> PAGE_SIZE_LOG_2);
+  // grow memory atleast by MINIMUM_NEW_PAGES pages, or by enough pages to store the payload size * 2, whichever is larger
+  size_t pages_to_alloc = max(MINIMUM_NEW_PAGES, align(payload_size << GROW_MEMORY_MULTIPLIER_LOG_2, PAGE_SIZE) >> PAGE_SIZE_LOG_2) + HEADERPAGES_PER_GROUP;
   if (!grow_wasm_memory(pages_to_alloc)) {
     return 0;
   }
@@ -241,6 +253,7 @@ NO_WASLR static size_t allocate_pages(size_t payload_size) {
 }
 
 NO_WASLR static void fisher_yates_shuffle(size_t *array, size_t size) {
+  if (size==1) return;
   for (size_t i = size - 1; i > 0; i--) {
     size_t j = __rand() % (i + 1);
     size_t temp = array[i];
@@ -447,13 +460,13 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
   }
   // we have an array of allocated chunks
   struct freelist *next = NULL;
-  size_t size_granules = chunk_kind_to_granules(kind) << GRANULE_SIZE_LOG_2;
+  size_t size_slots = chunk_kind_to_granules(kind) << GRANULE_SIZE_LOG_2;
   // Example: GRANULES_1, 256 chunk size => 32 x 8 byte ptrs per chunk, 4 different chunks => 128 ptrs total 
-  size_t num_elements_per_chunk = CHUNK_SIZE / size_granules; 
+  size_t num_elements_per_chunk = CHUNK_SIZE / size_slots; 
   size_t numElements = num_elements_per_chunk * SMALL_OBJECT_RANDOM_CHUNKS;
 
   size_t indices[numElements];
-    for (size_t i=0; i<numElements; i++) {
+  for (size_t i=0; i<numElements; i++) {
     indices[i] = i;
   }
   fisher_yates_shuffle(indices, numElements);
@@ -462,12 +475,9 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
     size_t i = indices[idx];
     size_t found_chunk_idx = i / num_elements_per_chunk;
     size_t chunk_local_idx = i % num_elements_per_chunk;
-    struct freelist *head = (struct freelist*) (found_chunks[found_chunk_idx] + (chunk_local_idx*size_granules));
+    struct freelist *head = (struct freelist*) (found_chunks[found_chunk_idx] + (chunk_local_idx*size_slots));
 
     head->next = next;
-    if (!IS_WITHIN_MEMORY(next)) {
-      debug_early(9998);
-    }
     next = head;
   }
 
@@ -475,41 +485,57 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
 }
 
 NO_WASLR static void check_freelist() {
+    uint64_t counter = *(uint64_t*)COUNTER;
+    counter = 0;
     struct freelist *cur = *get_small_object_freelist(GRANULES_1);
     size_t count = 0;
+
+    //uint8_t interesting = 0;
+
+    debug_early(123456);   
+    for(int i=0; i<100; i++) {
+      debug_early((uintptr_t)cur);
+      cur = cur->next;
+    }
+    debug_early((uintptr_t)cur);
+    return;
     while (cur) {
         uintptr_t addr = (uintptr_t)cur;
+        /*if (interesting) {
+          debug_early(addr);
+          struct freelist *next = cur->next;
+          cur = next;
+          debug_early((uintptr_t)cur);
+          return;
+        }*/
 
-        if (addr && !IS_WITHIN_MEMORY(addr)) {
-            debug_early(1001);
-            debug_early(addr);
-            __builtin_trap();
-            return;
+        if (addr == 1974672) {
+          //interesting=1;
+          debug_early(888888);
+          counter++;
+          if (counter==1) {
+            debug_early(555551);
+          } 
+          if (counter==2){
+            debug_early(555555);
+          }
+          //return;
         }
-
         struct freelist *next = cur->next;
-
-        if (next && !IS_WITHIN_MEMORY((uintptr_t)next)) {
-            debug_early(1002);
-            debug_early((uintptr_t)next);
-            __builtin_trap();
-            return;
-        }
 
         cur = next;
 
         if (++count > 2000) {
             debug_early(123456);   
-            /*struct freelist *cur = *get_small_object_freelist(GRANULES_1);
-            for(int i=0; i<2000; i++) {
+            struct freelist *cur = *get_small_object_freelist(GRANULES_1);
+            for(int i=0; i<100; i++) {
               debug_early((uintptr_t)cur);
               cur = cur->next;
-            }*/
+            }
             __builtin_trap();
             return;
         }
     }
-  debug_early(666);
   debug_early(count);
   /*if (count == 1360) {
     struct freelist *cur = *get_small_object_freelist(GRANULES_1);
@@ -524,7 +550,8 @@ NO_WASLR static void check_freelist() {
 NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     debug_early(31);
     debug_early(kind);
-    check_freelist();
+    check_headerpage();
+    //check_freelist();
     struct freelist **loc = get_small_object_freelist(kind);
     if (!*loc) {
         // freelist empty
@@ -536,23 +563,22 @@ NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     }
 
     struct freelist *ret = *loc;
-    if (!IS_WITHIN_MEMORY((uintptr_t)ret->next)) {
-      debug_early(9999);
-      debug_early(kind);
-    }
-    debug_early(32);
-    check_freelist();
     *loc = ret->next;
-    if ((uintptr_t)ret == 11439744) {
-    debug_early(77776);
-    }
+
+    debug_early(881177);
+    debug_early((uintptr_t)ret);
+    check_headerpage();
+    //check_freelist();
+    debug_early(32);
+  
     return (void *) ret;
 }
 
 NO_WASLR static void* allocate_large(size_t size) {
   debug_early(41);
+  check_headerpage();
   debug_early(size);
-  check_freelist();
+  //check_freelist();
   size_t size_in_chunks = (size + CHUNK_MASK) >> CHUNK_SIZE_LOG_2;
   size_t found_chunks[1]; // array of size 1 so we do not need extra handling in find_free_chunks
   struct search_result res = find_free_chunks(found_chunks, size_in_chunks, 1, LARGE_OBJECT, 0);
@@ -570,12 +596,14 @@ NO_WASLR static void* allocate_large(size_t size) {
       return NULL;
     }
   }
-  debug_early(42);
-  check_freelist();
+
   // we have a pointer to "size_in_chunks" consecutive chunks at index 0 of found_chunks
-  if ((uintptr_t)found_chunks[0] == 11439744) {
-    debug_early(77776);
-  }
+
+  debug_early(881177);
+  debug_early((uintptr_t) found_chunks[0]);
+  check_headerpage();
+  //check_freelist();
+  debug_early(42);
   return (void*) found_chunks[0];
 }
 
@@ -591,6 +619,7 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(calloc)(size_t num, size_t size) {
     for(size_t i=0; i<total_size; i++) {
       bptr[i] = 0;
     }
+    debug_early(61);
     return ptr;
 }
 
@@ -624,6 +653,7 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(realloc)(void* ptr, size_t new_size) {
 
   // free old memory
   free(ptr);
+  debug_early(51);
   return new_alloc;
 }
 
@@ -635,11 +665,8 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(malloc)(size_t size) {
 
 NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
   debug_early(70);
-  debug_early((uintptr_t)ptr);
-  if ((uintptr_t)ptr == 11439744) {
-    debug_early(77777);
-  }
-  check_freelist();
+  check_headerpage();
+  //check_freelist();
   if (!ptr) return;
   // get header page for pointer
   struct header_page *headerpage = get_headerpage(ptr);
@@ -653,13 +680,35 @@ NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
     // freed object is put at the front of the freelist. No additional randomization at this point
     struct freelist **loc = get_small_object_freelist(kind);
     struct freelist *obj = ptr;
-    if (!IS_WITHIN_MEMORY((uintptr_t)ptr)) {
-      debug_early(9997);
+#ifdef DOUBLE_FREE_PROTECT
+    // TODO: Sonderfall 256 byte chunk. Kein Platz für bitmap
+    if (kind != GRANULES_32) {
+      size_t chunk_slot_size = chunk_kind_to_granules(kind) << 3;
+      uintptr_t chunk_start = (uintptr_t) ptr & ~CHUNK_MASK;
+      size_t offset = (uintptr_t)ptr-(uintptr_t)chunk_start;
+      size_t slot_index = offset / chunk_slot_size;
+      // dont check if slot index is valid. Unnecessary overhead
+      uint8_t *bitmap = (uint8_t *)chunk_start; 
+      size_t byte_index = slot_index >> 3;
+      size_t bit_index  = slot_index & 7;
+      uint8_t mask = 1 << bit_index;
+
+
+      if (!(bitmap[byte_index] & mask)) {
+          // already free! Do not trap here, just return
+          return;
+      } else {
+          bitmap[byte_index] &= ~mask;
+      }
     }
+#endif
     obj->next = *loc;
     *loc = obj;
   } 
-  debug_early(71);
+  debug_early(771188);
+  debug_early((uintptr_t)ptr);
   debug_early(kind);
-  check_freelist();
+  check_headerpage();
+  //check_freelist();
+  debug_early(71);
 }
