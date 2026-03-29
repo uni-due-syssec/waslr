@@ -20,22 +20,6 @@
 // OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-
-// Randomize Granules within a Chunk
-#define RAND_GRANULES
-// Randomize Chunks within a page: Not implemented yet
-#define RAND_CHUNKS
-// - pages within memory space: No (not sure if possible)
-
-// prevent inlining of malloc/free so the special prologue applies
-#define NO_WASLR_INLINE __attribute__((waslr_no_rand,noinline))
-// all other function can be inlined if necessary, but they should use the original prologue
-#define NO_WASLR __attribute__((waslr_no_rand))
-
-#include "helper.h"
-#include "common.h"
-#include "walloc.h"
-
 typedef __SIZE_TYPE__ size_t;
 typedef __UINTPTR_TYPE__ uintptr_t;
 typedef __UINT8_TYPE__ uint8_t;
@@ -59,13 +43,12 @@ static inline uintptr_t align(uintptr_t val, uintptr_t alignment) {
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
-#define MEMORY_START 1024
-
 #define CHUNK_SIZE 256
 #define CHUNK_SIZE_LOG_2 8
 #define CHUNK_MASK (CHUNK_SIZE - 1)
 STATIC_ASSERT_EQ(CHUNK_SIZE, 1 << CHUNK_SIZE_LOG_2);
 
+#define PAGE_SIZE 65536
 #define PAGE_SIZE_LOG_2 16
 #define PAGE_MASK (PAGE_SIZE - 1)
 STATIC_ASSERT_EQ(PAGE_SIZE, 1 << PAGE_SIZE_LOG_2);
@@ -107,14 +90,14 @@ static const uint8_t small_object_granule_sizes[] =
 #undef SMALL_OBJECT_GRANULE_SIZE
 };
 
-NO_WASLR static enum chunk_kind granules_to_chunk_kind(unsigned granules) {
+static enum chunk_kind granules_to_chunk_kind(unsigned granules) {
 #define TEST_GRANULE_SIZE(i) if (granules <= i) return GRANULES_##i;
   FOR_EACH_SMALL_OBJECT_GRANULES(TEST_GRANULE_SIZE);
 #undef TEST_GRANULE_SIZE
   return LARGE_OBJECT;
 }
   
-NO_WASLR static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
+static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
   switch (kind) {
 #define CHUNK_KIND_GRANULE_SIZE(i) case GRANULES_##i: return i;
   FOR_EACH_SMALL_OBJECT_GRANULES(CHUNK_KIND_GRANULE_SIZE);
@@ -133,8 +116,6 @@ struct page_header {
   uint8_t chunk_kinds[CHUNKS_PER_PAGE];
 };
 
-// page is 65536 (256*256) bytes large 
-// first chunk/256 bytes can be either a page_header or a chunk
 struct page {
   union {
     struct page_header header;
@@ -146,10 +127,10 @@ struct page {
 #define FIRST_ALLOCATABLE_CHUNK 1
 STATIC_ASSERT_EQ(PAGE_HEADER_SIZE, FIRST_ALLOCATABLE_CHUNK * CHUNK_SIZE);
 
-NO_WASLR static struct page* get_page(void *ptr) {
+static struct page* get_page(void *ptr) {
   return (struct page*) (char*) (((uintptr_t) ptr) & ~PAGE_MASK);
 }
-NO_WASLR static unsigned get_chunk_index(void *ptr) {
+static unsigned get_chunk_index(void *ptr) {
   return (((uintptr_t) ptr) & PAGE_MASK) / CHUNK_SIZE;
 }
 
@@ -164,78 +145,44 @@ struct large_object {
 
 #define LARGE_OBJECT_HEADER_SIZE (sizeof (struct large_object))
 
-NO_WASLR static inline void* get_large_object_payload(struct large_object *obj) {
+static inline void* get_large_object_payload(struct large_object *obj) {
   return ((char*) obj) + LARGE_OBJECT_HEADER_SIZE;
 }
-NO_WASLR static inline struct large_object* get_large_object(void *ptr) {
+static inline struct large_object* get_large_object(void *ptr) {
   return (struct large_object*) (((char*) ptr) - LARGE_OBJECT_HEADER_SIZE);
 }
 
 static struct freelist *small_object_freelists[SMALL_OBJECT_CHUNK_KINDS];
 static struct large_object *large_objects;
 
-/*
-    TODOs
-    4) Small Objects: Implement Randomization of Chunks
-    5) Large Objects: Implement Randomization
-    6) Randomize insertion in free()
-
-    - currently: obtain small objects does not expect preallocated pages
-      - it sees the freelist is empty, allocates a new page and places the chunk on THAT page
-      - have to ensure it checks existing pages
-
-
-    Normally:
-    - Small objects: organized in 256 byte chunks => max. 256 chunks per page
-      - 1 chunk less due to page header
-    - Large objects: allocated on demand
-    -SO and LO allocations can be mixed within pages
-
-    - pre allocate X pages (100?)
-    - use entire pages for the page headers (256 bytes each), e.g.:
-      - page 0: unused for walloc
-      - page 1: 256 headers => for the following 256 pages
-      - page 258: 256 headers => for the next 256 pages
-      - and so on
-    - moving headers like this should make handling LO allocations that span multiple pages easier
-      - because if an LO needs more than one page, the next page's header would not allow it
-    - make LO consist of chunks
-*/
-
-
-//extern void __heap_base; 
-
+extern void __heap_base;
 static size_t walloc_heap_size;
 
-uintptr_t grow_wasm_memory(size_t size){
-  // Always grow the walloc heap at least by 50%.
-  uintptr_t grow = align(max(walloc_heap_size / 2, size), PAGE_SIZE);
-  ASSERT(grow);
-  if (__builtin_wasm_memory_grow(0, grow >> PAGE_SIZE_LOG_2) == -1) {
-    return 0;
-  }
-  walloc_heap_size += grow;
-  return grow;
-}
-
-NO_WASLR static struct page* allocate_pages(size_t payload_size, size_t *n_allocated) {
+static struct page*
+allocate_pages(size_t payload_size, size_t *n_allocated) {
   size_t needed = payload_size + PAGE_HEADER_SIZE;
-  size_t heap_size = __builtin_wasm_memory_size(0) * PAGE_SIZE; // gets the current heap size
+  size_t heap_size = __builtin_wasm_memory_size(0) * PAGE_SIZE;
   uintptr_t base = heap_size;
   uintptr_t preallocated = 0, grow = 0;
 
   if (!walloc_heap_size) {
     // We are allocating the initial pages, if any.  We skip the first 64 kB,
     // then take any additional space up to the memory size.
-    uintptr_t heap_base = align(MEMORY_START, PAGE_SIZE); // 67248, 65536 => 131072
-    preallocated = heap_size - heap_base; // Preallocated pages. 131072 - 131072 => 0
-    walloc_heap_size = preallocated; // = 0
-    base -= preallocated; // = 
+    uintptr_t heap_base = align((uintptr_t)&__heap_base, PAGE_SIZE);
+    preallocated = heap_size - heap_base; // Preallocated pages.
+    walloc_heap_size = preallocated;
+    base -= preallocated;
   }
 
   if (preallocated < needed) {
-    grow = grow_wasm_memory(needed - preallocated);
-    if(!grow) return NULL;
+    // Always grow the walloc heap at least by 50%.
+    grow = align(max(walloc_heap_size / 2, needed - preallocated),
+                 PAGE_SIZE);
+    ASSERT(grow);
+    if (__builtin_wasm_memory_grow(0, grow >> PAGE_SIZE_LOG_2) == -1) {
+      return NULL;
+    }
+    walloc_heap_size += grow;
   }
   
   struct page *ret = (struct page *)base;
@@ -246,7 +193,8 @@ NO_WASLR static struct page* allocate_pages(size_t payload_size, size_t *n_alloc
   return ret;
 }
 
-NO_WASLR static char* allocate_chunk(struct page *page, unsigned idx, enum chunk_kind kind) {
+static char*
+allocate_chunk(struct page *page, unsigned idx, enum chunk_kind kind) {
   page->header.chunk_kinds[idx] = kind;
   return page->chunks[idx].data;
 }
@@ -254,7 +202,7 @@ NO_WASLR static char* allocate_chunk(struct page *page, unsigned idx, enum chunk
 // It's possible for splitting to produce a large object of size 248 (256 minus
 // the header size) -- i.e. spanning a single chunk.  In that case, push the
 // chunk back on the GRANULES_32 small object freelist.
-NO_WASLR static void maybe_repurpose_single_chunk_large_objects_head(void) {
+static void maybe_repurpose_single_chunk_large_objects_head(void) {
   if (large_objects->size < CHUNK_SIZE) {
     unsigned idx = get_chunk_index(large_objects);
     char *ptr = allocate_chunk(get_page(large_objects), idx, GRANULES_32);
@@ -268,7 +216,7 @@ NO_WASLR static void maybe_repurpose_single_chunk_large_objects_head(void) {
 // If there have been any large-object frees since the last large object
 // allocation, go through the freelist and merge any adjacent objects.
 static int pending_large_object_compact = 0;
-NO_WASLR static struct large_object**
+static struct large_object**
 maybe_merge_free_large_object(struct large_object** prev) {
   struct large_object *obj = *prev;
   while (1) {
@@ -302,7 +250,7 @@ maybe_merge_free_large_object(struct large_object** prev) {
     }
   }
 }
-NO_WASLR static void
+static void
 maybe_compact_free_large_objects(void) {
   if (pending_large_object_compact) {
     pending_large_object_compact = 0;
@@ -324,13 +272,11 @@ maybe_compact_free_large_objects(void) {
 //
 // The return value's corresponding chunk in the page as starting a large
 // object.
-NO_WASLR static struct large_object*
+static struct large_object*
 allocate_large_object(size_t size) {
   maybe_compact_free_large_objects();
-  // There may exist large objects (from previous frees) that could fulfill the request
   struct large_object *best = NULL, **best_prev = &large_objects;
   size_t best_size = -1;
-  // Look for the smallest LO that could serve the request
   for (struct large_object **prev = &large_objects, *walk = large_objects;
        walk;
        prev = &walk->next, walk = walk->next) {
@@ -346,19 +292,16 @@ allocate_large_object(size_t size) {
   }
 
   if (!best) {
-    //console("NO BEST FOUND");
     // The large object freelist doesn't have an object big enough for this
     // allocation.  Allocate one or more pages from the OS, and treat that new
     // sequence of pages as a fresh large object.  It will be split if
     // necessary.
     size_t size_with_header = size + sizeof(struct large_object);
-    size_t n_allocated = 0; // how many pages are allocated
+    size_t n_allocated = 0;
     struct page *page = allocate_pages(size_with_header, &n_allocated);
-    //console_uintptr("ALLOCATED NEW PAGES: ", (uintptr_t)n_allocated);
     if (!page) {
       return NULL;
     }
-    // allocates one large object that fills the entire page
     char *ptr = allocate_chunk(page, FIRST_ALLOCATABLE_CHUNK, LARGE_OBJECT);
     best = (struct large_object *)ptr;
     size_t page_header = ptr - ((char*) page);
@@ -375,7 +318,6 @@ allocate_large_object(size_t size) {
 
   size_t tail_size = (best_size - size) & ~CHUNK_MASK;
   if (tail_size) {
-    //console("TAIL!");
     // The best-fitting object has 1 or more aligned chunks free after the
     // requested allocation; split the tail off into a fresh aligned object.
     struct page *start_page = get_page(best);
@@ -383,11 +325,9 @@ allocate_large_object(size_t size) {
     char *end = start + best_size;
 
     if (start_page == get_page(end - tail_size - 1)) {
-      //console("TAIL A");
       // The allocation does not span a page boundary; yay.
       ASSERT_ALIGNED((uintptr_t)end, CHUNK_SIZE);
     } else if (size < PAGE_SIZE - LARGE_OBJECT_HEADER_SIZE - CHUNK_SIZE) {
-      //console("TAIL B");
       // If the allocation itself smaller than a page, split off the head, then
       // fall through to maybe split the tail.
       ASSERT_ALIGNED((uintptr_t)end, PAGE_SIZE);
@@ -411,8 +351,6 @@ allocate_large_object(size_t size) {
       // A large object that spans more than one page will consume all of its
       // tail pages.  Therefore if the split traverses a page boundary, round up
       // to page size.
-      
-      // Most likely because in multi page allocations, the page header cannot be placed at the beginning of the pages following the first page
       ASSERT_ALIGNED((uintptr_t)end, PAGE_SIZE);
       size_t first_page_size = PAGE_SIZE - (((uintptr_t)start) & PAGE_MASK);
       size_t tail_pages_size = align(size - first_page_size, PAGE_SIZE);
@@ -445,87 +383,43 @@ allocate_large_object(size_t size) {
   return best;
 }
 
-
-// If freelist for a chunk kind is empty, the list is repopulated 
-NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
-  //  check if there is an available chunk to be used for the new small object
-  // Granule 32 = 256 bytes = Chunk size. Only populated through free and remainders of LO allocs
-  //console_uintptr("KIND:", (uintptr_t)kind);
-  struct freelist** whole_chunk_freelist = &small_object_freelists[GRANULES_32]; 
+static struct freelist*
+obtain_small_objects(enum chunk_kind kind) {
+  struct freelist** whole_chunk_freelist = &small_object_freelists[GRANULES_32];
   void *chunk;
   if (*whole_chunk_freelist) {
-    //console("Using Granules_32!");
-    // take a new chunk to be split into smaller granules
     chunk = *whole_chunk_freelist;
     *whole_chunk_freelist = (*whole_chunk_freelist)->next;
   } else {
-    //console("alloc large object 0");
-    // returns the start of a large object
     chunk = allocate_large_object(0);
     if (!chunk) {
       return NULL;
     }
   }
-  // TODO: If we want to randomize, we need to take a random chunk between chunk and chunk + LO size
   char *ptr = allocate_chunk(get_page(chunk), get_chunk_index(chunk), kind);
   char *end = ptr + CHUNK_SIZE;
-  // populate free list for chunk kind
   struct freelist *next = NULL;
-  // get size in granules
   size_t size = chunk_kind_to_granules(kind) * GRANULE_SIZE;
-
-  #ifdef RAND_GRANULES
-  size_t numChunks = CHUNK_SIZE / size; // MAX: 32 for GRANULES_1 -> Use stack for array
-  // Optimization to avoid Variable Length Arrays:
-  // Instead of using numChunks to size the array dynamically, we always use 32
-  // Because 256 / 8 bytes (smallest alloc size) = 32 
-  // Afterwards, we only shuffle the first numChunks elements of the array
-  // Of course this results in a slight overhead but we currently cannot support VLAs with randomization 
-  
-  // TODO: import / page 0
-  size_t indices[32];
-  for (size_t i=0; i<32; i++) {
-    indices[i] = i;
-  }
-  fisher_yates_shuffle(indices, numChunks);
-  
-  for (size_t idx = 0; idx < numChunks; idx++) {
-    size_t i = indices[idx] * size + size;
-    //console_uintptr("i:", i);
-    struct freelist *head = (struct freelist*)(end - i);
-    //console_uintptr("PTR:", (uintptr_t)head);
-    head->next = next;
-    next = head;
-  }
-  #else 
   for (size_t i = size; i <= CHUNK_SIZE; i += size) {
-    console_uintptr("i:", i);
     struct freelist *head = (struct freelist*) (end - i);
-    //console_uintptr("PTR:", (uintptr_t)head);
     head->next = next;
     next = head;
   }
- #endif
   return next;
 }
 
-NO_WASLR static inline size_t size_to_granules(size_t size) {
+static inline size_t size_to_granules(size_t size) {
   return (size + GRANULE_SIZE - 1) >> GRANULE_SIZE_LOG_2;
 }
-
-NO_WASLR static struct freelist** get_small_object_freelist(enum chunk_kind kind) {
+static struct freelist** get_small_object_freelist(enum chunk_kind kind) {
   ASSERT(kind < SMALL_OBJECT_CHUNK_KINDS);
   return &small_object_freelists[kind];
 }
 
-
-NO_WASLR static void* allocate_small(enum chunk_kind kind) {
-  //console("ALLOC SMALL");
-  // get free list for this chunk kind (*loc = current head)
+static void*
+allocate_small(enum chunk_kind kind) {
   struct freelist **loc = get_small_object_freelist(kind);
-  // check if freelist empty
   if (!*loc) {
-    // allocate a new page of small objects for this kind 
     struct freelist *freelist = obtain_small_objects(kind);
     if (!freelist) {
       return NULL;
@@ -537,22 +431,21 @@ NO_WASLR static void* allocate_small(enum chunk_kind kind) {
   return (void *) ret;
 }
 
-NO_WASLR static void* allocate_large(size_t size) {
-  //console("ALLOC LARGE");
+static void*
+allocate_large(size_t size) {
   struct large_object *obj = allocate_large_object(size);
   return obj ? get_large_object_payload(obj) : NULL;
 }
- 
-NO_WASLR_INLINE void* malloc(size_t size) {
-  // granules = smallest unit 
-  size_t granules = size_to_granules(size); // 1
-  // determine the kind of chunk (size) for the needed number of granules
-  //console_uintptr("GRANULES:", granules);
+  
+void*
+malloc(size_t size) {
+  size_t granules = size_to_granules(size);
   enum chunk_kind kind = granules_to_chunk_kind(granules);
   return (kind == LARGE_OBJECT) ? allocate_large(size) : allocate_small(kind);
 }
 
-NO_WASLR_INLINE void free(void *ptr) {
+void
+free(void *ptr) {
   if (!ptr) return;
   struct page *page = get_page(ptr);
   unsigned chunk = get_chunk_index(ptr);
@@ -561,12 +454,10 @@ NO_WASLR_INLINE void free(void *ptr) {
     struct large_object *obj = get_large_object(ptr);
     obj->next = large_objects;
     large_objects = obj;
-    allocate_chunk(page, chunk, FREE_LARGE_OBJECT); // update page header 
-    pending_large_object_compact = 1; // on next LO allocation, adjacent LOs are merged
+    allocate_chunk(page, chunk, FREE_LARGE_OBJECT);
+    pending_large_object_compact = 1;
   } else {
     size_t granules = kind;
-    // freed object is put at the front of the freelist
-    // TODO: Check if it is necessary to randomize this too
     struct freelist **loc = get_small_object_freelist(granules);
     struct freelist *obj = ptr;
     obj->next = *loc;

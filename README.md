@@ -1,5 +1,7 @@
 # implementation
 
+OUTDATED 
+
 ## Prerequisites
 TBA
 
@@ -13,7 +15,10 @@ TBA
 
 2. Build libclang_rt.builtins-wasm32.a
 - waslr-llvm/build-compiler-rt.sh 
-- copy into waslr-llvm/build/lib/clang/20/lib/wasi
+- cd build-compiler-rt && ninja
+- copy build-compiler-rt/lib/linux/libclang_rt.builtins-wasm32-waslr.a into waslr-llvm/build/lib/clang/20/lib/wasi/libclang_rt.builtins-wasm32.a
+    - contains compiler builtins with our custom prologue!
+    - optional TODO: add cmake option to build without waslr support
 
 3. Build wasi libc
 - support/wasi-libc/build.sh
@@ -63,3 +68,18 @@ TBA
 - memorize max possible allocation
     - so that we can prevent searching an entire headerpage if we already know the allocation wont fit
     - pretty sure there is no efficient way to do this. It always ends up requiring to check the entire headerpage after each allocation/free, which would defeat the entire purpose of this improvement
+
+
+
+### multiple header pages per group
+
+HEADER GROUP
+HEADER 0 <-- contains N unused chunks
+HEADER 1
+...
+HEADER N
+
+header_page {
+    meta[256 * N]
+    headers[65536 * N - size(meta)]
+}

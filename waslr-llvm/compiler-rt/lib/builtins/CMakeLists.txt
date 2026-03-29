@@ -54,7 +54,7 @@ if (COMPILER_RT_STANDALONE_BUILD)
   # LLVM configuration is not being utilized.
   option(COMPILER_RT_BUILTINS_ENABLE_PIC
     "Turns on or off -fPIC for the builtin library source"
-    ON)
+    OFF)
 endif()
 
 include(builtin-config-ix)
@@ -910,6 +910,9 @@ else ()
         list(APPEND BUILTIN_CFLAGS_${arch} -fforce-enable-int128)
       endif()
 
+      # Method 2: list append (better practice)
+      list(APPEND BUILTIN_CFLAGS_${arch} -fwaslr)
+      
       add_compiler_rt_runtime(clang_rt.builtins
                               STATIC
                               ARCHS ${arch}

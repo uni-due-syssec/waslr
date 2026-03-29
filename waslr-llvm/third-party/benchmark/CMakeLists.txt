@@ -322,18 +322,18 @@ endif()
 cxx_feature_check(STEADY_CLOCK)
 # Ensure we have pthreads
 set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
-cxx_feature_check(PTHREAD_AFFINITY)
+#find_package(Threads REQUIRED)
+#cxx_feature_check(PTHREAD_AFFINITY)
 
-if (BENCHMARK_ENABLE_LIBPFM)
-  find_package(PFM REQUIRED)
-endif()
+#if (BENCHMARK_ENABLE_LIBPFM)
+#  find_package(PFM REQUIRED)
+#endif()
 
 # Set up directories
-include_directories(${PROJECT_SOURCE_DIR}/include)
+#include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # Build the targets
-add_subdirectory(src)
+#add_subdirectory(src)
 
 if (BENCHMARK_ENABLE_TESTING)
   enable_testing()
