@@ -84,7 +84,6 @@ enum chunk_kind {
 };
 
 #define SEED_ADDR 75000 // freelists from 76000 onwards, allocator stackframes from 74000 downwards
-#define COUNTER 75500
 
 void __srand(unsigned s) {
   *(uint64_t*)SEED_ADDR = s-1;
@@ -198,17 +197,6 @@ NO_WASLR static void allocate_chunks(struct header_page *page, unsigned idx, enu
     uint8_t current = page->headers[offset];
     page->headers[offset] = kind;
   }
-}
-
-NO_WASLR static void check_headerpage() {
-  struct header_page* hp = (struct header_page*) 131072;
-  unsigned chunk_idx = get_header_chunk_index(hp, (void*)1974672);
-  unsigned char value = hp->headers[chunk_idx];
-  debug_early(77777);
-  debug_early(value);
-
-  struct freelist* allocation_check = (struct freelist*)1974672;
-  debug_early((uintptr_t)allocation_check->next);
 }
 
 NO_WASLR static size_t get_allocation_size(void* ptr) {
@@ -484,74 +472,7 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
   return next;  
 }
 
-NO_WASLR static void check_freelist() {
-    uint64_t counter = *(uint64_t*)COUNTER;
-    counter = 0;
-    struct freelist *cur = *get_small_object_freelist(GRANULES_1);
-    size_t count = 0;
-
-    //uint8_t interesting = 0;
-
-    debug_early(123456);   
-    for(int i=0; i<100; i++) {
-      debug_early((uintptr_t)cur);
-      cur = cur->next;
-    }
-    debug_early((uintptr_t)cur);
-    return;
-    while (cur) {
-        uintptr_t addr = (uintptr_t)cur;
-        /*if (interesting) {
-          debug_early(addr);
-          struct freelist *next = cur->next;
-          cur = next;
-          debug_early((uintptr_t)cur);
-          return;
-        }*/
-
-        if (addr == 1974672) {
-          //interesting=1;
-          debug_early(888888);
-          counter++;
-          if (counter==1) {
-            debug_early(555551);
-          } 
-          if (counter==2){
-            debug_early(555555);
-          }
-          //return;
-        }
-        struct freelist *next = cur->next;
-
-        cur = next;
-
-        if (++count > 2000) {
-            debug_early(123456);   
-            struct freelist *cur = *get_small_object_freelist(GRANULES_1);
-            for(int i=0; i<100; i++) {
-              debug_early((uintptr_t)cur);
-              cur = cur->next;
-            }
-            __builtin_trap();
-            return;
-        }
-    }
-  debug_early(count);
-  /*if (count == 1360) {
-    struct freelist *cur = *get_small_object_freelist(GRANULES_1);
-    for(int i=0; i<count; i++) {
-      debug_early((uintptr_t)cur);
-      cur = cur->next;
-    }
-    return;
-  }*/
-}
-
 NO_WASLR static void* allocate_small(enum chunk_kind kind) {
-    debug_early(31);
-    debug_early(kind);
-    check_headerpage();
-    //check_freelist();
     struct freelist **loc = get_small_object_freelist(kind);
     if (!*loc) {
         // freelist empty
@@ -565,20 +486,10 @@ NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     struct freelist *ret = *loc;
     *loc = ret->next;
 
-    debug_early(881177);
-    debug_early((uintptr_t)ret);
-    check_headerpage();
-    //check_freelist();
-    debug_early(32);
-  
     return (void *) ret;
 }
 
 NO_WASLR static void* allocate_large(size_t size) {
-  debug_early(41);
-  check_headerpage();
-  debug_early(size);
-  //check_freelist();
   size_t size_in_chunks = (size + CHUNK_MASK) >> CHUNK_SIZE_LOG_2;
   size_t found_chunks[1]; // array of size 1 so we do not need extra handling in find_free_chunks
   struct search_result res = find_free_chunks(found_chunks, size_in_chunks, 1, LARGE_OBJECT, 0);
@@ -598,18 +509,11 @@ NO_WASLR static void* allocate_large(size_t size) {
   }
 
   // we have a pointer to "size_in_chunks" consecutive chunks at index 0 of found_chunks
-
-  debug_early(881177);
-  debug_early((uintptr_t) found_chunks[0]);
-  check_headerpage();
-  //check_freelist();
-  debug_early(42);
   return (void*) found_chunks[0];
 }
 
 
 NO_WASLR NO_INLINE void* WASM_EXPORT(calloc)(size_t num, size_t size) {
-    debug_early(60);
     size_t total_size = num*size;
 
     void* ptr = malloc(total_size);
@@ -619,13 +523,11 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(calloc)(size_t num, size_t size) {
     for(size_t i=0; i<total_size; i++) {
       bptr[i] = 0;
     }
-    debug_early(61);
     return ptr;
 }
 
 NO_WASLR NO_INLINE void* WASM_EXPORT(realloc)(void* ptr, size_t new_size) {
   // if ptr is null => malloc
-  debug_early(50);
   if(!ptr) {
     return malloc(new_size);
   }
@@ -653,7 +555,6 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(realloc)(void* ptr, size_t new_size) {
 
   // free old memory
   free(ptr);
-  debug_early(51);
   return new_alloc;
 }
 
@@ -664,9 +565,6 @@ NO_WASLR NO_INLINE void* WASM_EXPORT(malloc)(size_t size) {
 }
 
 NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
-  debug_early(70);
-  check_headerpage();
-  //check_freelist();
   if (!ptr) return;
   // get header page for pointer
   struct header_page *headerpage = get_headerpage(ptr);
@@ -680,35 +578,8 @@ NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
     // freed object is put at the front of the freelist. No additional randomization at this point
     struct freelist **loc = get_small_object_freelist(kind);
     struct freelist *obj = ptr;
-#ifdef DOUBLE_FREE_PROTECT
-    // TODO: Sonderfall 256 byte chunk. Kein Platz für bitmap
-    if (kind != GRANULES_32) {
-      size_t chunk_slot_size = chunk_kind_to_granules(kind) << 3;
-      uintptr_t chunk_start = (uintptr_t) ptr & ~CHUNK_MASK;
-      size_t offset = (uintptr_t)ptr-(uintptr_t)chunk_start;
-      size_t slot_index = offset / chunk_slot_size;
-      // dont check if slot index is valid. Unnecessary overhead
-      uint8_t *bitmap = (uint8_t *)chunk_start; 
-      size_t byte_index = slot_index >> 3;
-      size_t bit_index  = slot_index & 7;
-      uint8_t mask = 1 << bit_index;
 
-
-      if (!(bitmap[byte_index] & mask)) {
-          // already free! Do not trap here, just return
-          return;
-      } else {
-          bitmap[byte_index] &= ~mask;
-      }
-    }
-#endif
     obj->next = *loc;
     *loc = obj;
   } 
-  debug_early(771188);
-  debug_early((uintptr_t)ptr);
-  debug_early(kind);
-  check_headerpage();
-  //check_freelist();
-  debug_early(71);
 }
