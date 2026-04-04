@@ -35,10 +35,10 @@ typedef __UINT8_TYPE__ uint8_t;
 #endif
 #define ASSERT_EQ(a,b) ASSERT((a) == (b))
 
-static inline size_t max(size_t a, size_t b) {
+static size_t max(size_t a, size_t b) {
   return a < b ? b : a;
 }
-static inline uintptr_t align(uintptr_t val, uintptr_t alignment) {
+static uintptr_t align(uintptr_t val, uintptr_t alignment) {
   return (val + alignment - 1) & ~(alignment - 1);
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
@@ -107,6 +107,10 @@ static unsigned chunk_kind_to_granules(enum chunk_kind kind) {
   }
 }
 
+static size_t granules_to_bytes(size_t granules) {
+  return granules << GRANULE_SIZE_LOG_2;
+}
+
 // Given a pointer P returned by malloc(), we get a header pointer via
 // P&~PAGE_MASK, and a chunk index via (P&PAGE_MASK)/CHUNKS_PER_PAGE.  If
 // chunk_kinds[chunk_idx] is [FREE_]LARGE_OBJECT, then the pointer is a large
@@ -145,10 +149,10 @@ struct large_object {
 
 #define LARGE_OBJECT_HEADER_SIZE (sizeof (struct large_object))
 
-static inline void* get_large_object_payload(struct large_object *obj) {
+static void* get_large_object_payload(struct large_object *obj) {
   return ((char*) obj) + LARGE_OBJECT_HEADER_SIZE;
 }
-static inline struct large_object* get_large_object(void *ptr) {
+static struct large_object* get_large_object(void *ptr) {
   return (struct large_object*) (((char*) ptr) - LARGE_OBJECT_HEADER_SIZE);
 }
 
@@ -408,7 +412,7 @@ obtain_small_objects(enum chunk_kind kind) {
   return next;
 }
 
-static inline size_t size_to_granules(size_t size) {
+static size_t size_to_granules(size_t size) {
   return (size + GRANULE_SIZE - 1) >> GRANULE_SIZE_LOG_2;
 }
 static struct freelist** get_small_object_freelist(enum chunk_kind kind) {
@@ -463,4 +467,52 @@ free(void *ptr) {
     obj->next = *loc;
     *loc = obj;
   }
+}
+
+void* calloc(size_t num, size_t size) {
+  size_t total_size = num*size;
+  void* ptr = malloc(total_size);
+  if(!ptr) return NULL;
+  uint8_t* bptr = (uint8_t*)ptr;
+  for(size_t i=0; i<total_size; i++) {
+    bptr[i] = 0;
+  }
+  return ptr;
+}
+
+void* realloc(void* ptr, size_t new_size) {
+  if(!ptr) {
+    return malloc(new_size);
+  }
+  if(new_size==0){
+    free(ptr);
+    return NULL;
+  }
+  size_t alloc_size = 0;
+  struct page *page = get_page(ptr);
+  unsigned chunk = get_chunk_index(ptr);
+  uint8_t kind = page->header.chunk_kinds[chunk];
+  if (kind == LARGE_OBJECT) {
+    struct large_object *obj = get_large_object(ptr);
+    alloc_size = obj->size;
+  }
+  else {
+    size_t size_granules = chunk_kind_to_granules(kind);
+    alloc_size = granules_to_bytes(size_granules);
+  }
+
+  void* new_alloc = malloc(alloc_size);
+  if(!new_alloc) return NULL;
+
+  unsigned char* src = (unsigned char*)ptr;
+  unsigned char* dst = (unsigned char*)new_alloc;
+  
+  size_t n = (alloc_size < new_size) ? alloc_size : new_size;
+  for (size_t i = 0; i < n; i++) {
+      dst[i] = src[i];
+  }
+
+  // free old memory
+  free(ptr);
+  return new_alloc;  
 }

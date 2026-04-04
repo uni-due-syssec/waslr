@@ -3,7 +3,7 @@
 // easy way to ensure that SO freelist lives at a specific offset
 // without having to implement custom lowering in llvm
 #define SO_FREELIST_START 76000
-#define NUM_KINDS 10
+#define NUM_KINDS 16
 #define LIST_SIZE (NUM_KINDS * sizeof(struct freelist *)) 
 #define MAP_LOCATION_END (MAP_LOCATION_START + LIST_SIZE - 1)
 #define small_object_freelists ((struct freelist **)(SO_FREELIST_START))
@@ -37,9 +37,16 @@ static uintptr_t align(uintptr_t val, uintptr_t alignment) {
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
-#define SMALL_OBJECT_RANDOM_CHUNKS 4
-#define HEADERPAGES_PER_GROUP 2
-#define HEADERPAGES_PER_GROUP_LOG2 1
+#ifndef BASE_HEADERPAGES_PER_GROUP_LOG2
+#define BASE_HEADERPAGES_PER_GROUP_LOG2 1//overrideable, only for our eval
+#endif
+// also only for flexibility during eval. Remove later TODO
+// so that number of headerpages defined in the benchmarks scales if we change chunk size
+#define HEADERPAGES_PER_GROUP_LOG2 \
+    ((BASE_HEADERPAGES_PER_GROUP_LOG2 - (CHUNK_SIZE_LOG_2 - 8)) > 0 ? \
+      (BASE_HEADERPAGES_PER_GROUP_LOG2 - (CHUNK_SIZE_LOG_2 - 8)) : 0)
+
+#define HEADERPAGES_PER_GROUP (1 << HEADERPAGES_PER_GROUP_LOG2)
 #define GROW_MEMORY_MULTIPLIER_LOG_2 1 // when increasing memory, we grow by the number of bytes times a multiplier (power of 2)
 #define INITIAL_PAGES_ALLOC 200
 #define MINIMUM_NEW_PAGES 128
@@ -47,30 +54,38 @@ static uintptr_t align(uintptr_t val, uintptr_t alignment) {
 #define FIRST_USABLE_PAGE_IDX 2
 #define FIRST_USABLE_BYTE (FIRST_USABLE_PAGE_IDX << PAGE_SIZE_LOG_2)
 STATIC_ASSERT_GE((INITIAL_PAGES_ALLOC + 2), FIRST_USABLE_PAGE_IDX);
-STATIC_ASSERT_GE(INT32_MAX, (PAGE_SIZE * HEADERPAGES_PER_GROUP));
 
-#define CHUNK_SIZE 256
-#define CHUNK_SIZE_LOG_2 8
+#define CHUNK_SIZE_LOG_2 10 // 256 Chunk size
+#define CHUNK_SIZE (1 << CHUNK_SIZE_LOG_2) // could use __builtin_clz to calculate log2 based on chunk size but this is more portable although less readable
 #define CHUNK_MASK (CHUNK_SIZE - 1)
 STATIC_ASSERT_EQ(CHUNK_SIZE, 1 << CHUNK_SIZE_LOG_2);
 
-#define PAGE_SIZE_LOG_2 16
+#define SMALL_OBJECT_RANDOM_CHUNKS 4
+#define MAX_NEW_SLOTS_PER_SO_CHUNK 64 // limit the number of slots from a small object chunk to actually add to the freelist
+#if (MAX_NEW_SLOTS_PER_SO_CHUNK % SMALL_OBJECT_RANDOM_CHUNKS) != 0
+#error "MAX_NEW_SO_SLOTS_PER_REQUEST must be divisible by SMALL_OBJECT_RANDOM_CHUNKS"
+#endif
+
+
+#define PAGE_SIZE_LOG_2 16 // 65536 page size
+#define PAGE_SIZE (1 << PAGE_SIZE_LOG_2)
 #define PAGE_MASK (PAGE_SIZE - 1)
 STATIC_ASSERT_EQ(PAGE_SIZE, 1 << PAGE_SIZE_LOG_2);
+STATIC_ASSERT_GE(INT32_MAX, (PAGE_SIZE * HEADERPAGES_PER_GROUP));
 
 STATIC_ASSERT_EQ(0, PAGE_SIZE % CHUNK_SIZE);
 #define CHUNKS_PER_PAGE (PAGE_SIZE / CHUNK_SIZE)
 #define CHUNKS_PER_PAGE_LOG2 (PAGE_SIZE_LOG_2 - CHUNK_SIZE_LOG_2)
 
-#define GRANULE_SIZE 8
 #define GRANULE_SIZE_LOG_2 3
+#define GRANULE_SIZE (1 << GRANULE_SIZE_LOG_2)
 
 struct chunk {
     char data[CHUNK_SIZE];
 };
 
 #define FOR_EACH_SMALL_OBJECT_GRANULES(M) \
-  M(1) M(2) M(4) M(8) M(16) M(32)
+  M(1) M(2) M(4) M(8) M(16) M(32) M(64) M(128) //M(256) M(512)
   //M(1) M(2) M(3) M(4) M(5) M(6) M(8) M(10) M(16) M(32)
   
 enum chunk_kind {
@@ -447,26 +462,35 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
     }
   }
   // we have an array of allocated chunks
+
   struct freelist *next = NULL;
   size_t size_slots = chunk_kind_to_granules(kind) << GRANULE_SIZE_LOG_2;
-  // Example: GRANULES_1, 256 chunk size => 32 x 8 byte ptrs per chunk, 4 different chunks => 128 ptrs total 
-  size_t num_elements_per_chunk = CHUNK_SIZE / size_slots; 
-  size_t numElements = num_elements_per_chunk * SMALL_OBJECT_RANDOM_CHUNKS;
+  size_t slots_per_chunk = CHUNK_SIZE / size_slots;
+  size_t num_elements_per_chunk = min(MAX_NEW_SLOTS_PER_SO_CHUNK, slots_per_chunk);
 
-  size_t indices[numElements];
-  for (size_t i=0; i<numElements; i++) {
-    indices[i] = i;
-  }
-  fisher_yates_shuffle(indices, numElements);
+  size_t indices[slots_per_chunk];
 
-  for (size_t idx = 0; idx < numElements; idx++) {
-    size_t i = indices[idx];
-    size_t found_chunk_idx = i / num_elements_per_chunk;
-    size_t chunk_local_idx = i % num_elements_per_chunk;
-    struct freelist *head = (struct freelist*) (found_chunks[found_chunk_idx] + (chunk_local_idx*size_slots));
+  // chunks are already randomized due to our search
+  for (size_t c=0; c < SMALL_OBJECT_RANDOM_CHUNKS; c++) {
+    
+    for (size_t s=0; s<slots_per_chunk; s++) {
+      indices[s] = s;
+    }
+    // fisher yates shuffle
+    for (size_t i = 0; i < num_elements_per_chunk; i++) {
+      size_t j = i + __rand() % (slots_per_chunk - i);
+      size_t tmp = indices[i];
+      indices[i] = indices[j];
+      indices[j] = tmp;
+    }
 
-    head->next = next;
-    next = head;
+    for (size_t idx=0; idx < num_elements_per_chunk; idx++) {
+      size_t chunk_local_idx = indices[idx]; 
+
+      struct freelist *head = (struct freelist*)(found_chunks[c] + (chunk_local_idx * size_slots));
+      head -> next = next;
+      next = head;
+    }
   }
 
   return next;  
