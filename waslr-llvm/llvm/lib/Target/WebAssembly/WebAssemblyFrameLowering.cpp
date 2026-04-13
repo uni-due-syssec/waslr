@@ -293,7 +293,7 @@ namespace llvm {
 
 void WebAssemblyFrameLowering::emitPrologue(MachineFunction &MF,
                                             MachineBasicBlock &MBB) const {
-  // TODO: Do ".setMIFlag(MachineInstr::FrameSetup)" on emitted instructions
+  // Maybe do ".setMIFlag(MachineInstr::FrameSetup)" on emitted instructions
   auto &MFI = MF.getFrameInfo();
   assert(MFI.getCalleeSavedInfo().empty() &&
          "WebAssembly should not have callee-saved registers");
@@ -578,9 +578,7 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
 
   // the first page remains untouched, the second is for manual allocations like these.
   // The memory that is used for regular allocation requests starts on page 3.
-  // reserve ~8000 bytes for allocator stack frames
-  // Maybe TODO: if we can use the entire page for allocator Stack frames only, we know there will be no stack frames once a malloc/free call is finished.
-  //            Therefore we could just generate a random number between page3_start and page3_end and set the stack frame to start there
+  // Maybe: could also randomize the exact start in a predefined area since we control the entire memory layout
   int64_t allocStackframeStart = 74000;
   
   // Instead of only using the BasePtr when required, we use always use it to store the previous Stack Pointer

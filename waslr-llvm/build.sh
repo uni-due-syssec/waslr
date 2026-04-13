@@ -1,8 +1,9 @@
+mkdir -p build
 cd build
 cmake -G Ninja ../llvm \
   -DLLVM_TARGETS_TO_BUILD="WebAssembly" \
   -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_INCLUDE_BENCHMARKS=OFF \
   -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_BUILD_DOCS=OFF \
