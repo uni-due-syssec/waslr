@@ -14,7 +14,7 @@ To make the builtins available to the newly built toolchain, copy `support/libcl
 
 #### Optional: Build Compiler Runtime Libraries
 If you want to build the builtins and other compiler runtime libraries yourself, run `build-compiler-rt.sh`.
-Afterwards, run `ninja`in the `waslr-llvm/build-compiler-rt` directory.
+Afterwards, run `ninja` in the `waslr-llvm/build-compiler-rt` directory.
 
 Finally, copy `build-compiler-rt/lib/linux/libclang_rt.builtins-wasm32.a` into `build/lib/clang/20/lib/wasi/`.
 
@@ -32,3 +32,6 @@ A sysroot will be generated in `support/wasi-libc/sysroot/`.
 - Linker flag: `-Wl,--waslr`
 - Compile & Link `support/waslr.c`
     - To ensure it overrides the default allocator symbols, it should be placed early/first in the link order
+
+## Host requirements
+The host has to provide a seed for the RNG through the imported global `__waslr_seed`

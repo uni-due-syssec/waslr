@@ -1372,8 +1372,12 @@ void Writer::createInitMemoryFunction() {
 
       // If there is atleast on passive segment, allocate space
       if (hasPassiveInitializedSegments()) {
-        const FunctionSymbol *Ralloc = nullptr;
-        assert((Ralloc = dyn_cast_or_null<FunctionSymbol>(symtab->find("malloc"))) && "Symbol 'malloc' missing or not a FunctionSymbol");
+        const FunctionSymbol *Ralloc = dyn_cast_or_null<FunctionSymbol>(symtab->find("malloc"));
+        // error instead of assert for release builds!
+        if(!Ralloc) {
+          error("Symbol 'malloc' missing!");
+        }
+        //assert(Ralloc && "Symbol 'malloc' missing or not a FunctionSymbol");
         writeI32Const(os, total_psegment_size, "memory region size"); 
         writeU8(os, WASM_OPCODE_CALL, "CALL");
         writeUleb128(os, Ralloc->getFunctionIndex(), "function index");
