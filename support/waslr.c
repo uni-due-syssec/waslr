@@ -34,6 +34,7 @@ static uintptr_t align(uintptr_t val, uintptr_t alignment) {
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
 
+#ifdef WASLR_EVAL
 #ifndef BASE_HEADERPAGES_PER_GROUP_LOG2
 #define BASE_HEADERPAGES_PER_GROUP_LOG2 1
 #endif
@@ -41,7 +42,9 @@ static uintptr_t align(uintptr_t val, uintptr_t alignment) {
 #define HEADERPAGES_PER_GROUP_LOG2 \
     ((BASE_HEADERPAGES_PER_GROUP_LOG2 - (CHUNK_SIZE_LOG_2 - 8)) > 0 ? \
       (BASE_HEADERPAGES_PER_GROUP_LOG2 - (CHUNK_SIZE_LOG_2 - 8)) : 0)
-
+#else 
+#define HEADERPAGES_PER_GROUP_LOG2 1
+#endif
 #define HEADERPAGES_PER_GROUP (1 << HEADERPAGES_PER_GROUP_LOG2)
 #define GROW_MEMORY_MULTIPLIER_LOG_2 1
 #define INITIAL_PAGES_ALLOC 200

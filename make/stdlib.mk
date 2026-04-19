@@ -1,0 +1,87 @@
+include common.mk 
+# Builds both libc and libc++
+
+WASI_LIBC := $(SUPPORT_ROOT)/wasi-libc
+LIBCXX_SOURCE := $(LLVM_ROOT)/runtimes
+LIBCXX_INSTALL_DIR := $(SYSROOT)
+
+LLVM_AR := $(SDK_ROOT)/bin/llvm-ar
+LLVM_NM := $(SDK_ROOT)/bin/llvm-nm
+
+LIBCXX_CMAKE_FLAGS := \
+	-G Ninja \
+	-S $(LIBCXX_SOURCE) \
+	-B $(LIBCXX_BUILD_DIR) \
+	-DCMAKE_C_COMPILER=$(CLANG) \
+	-DCMAKE_CXX_COMPILER=$(CLANGXX) \
+	-DCMAKE_SYSROOT=$(SYSROOT) \
+	-DLLVM_ENABLE_RUNTIMES:STRING="libcxx;libcxxabi" \
+	-DCMAKE_INSTALL_INCLUDEDIR=include \
+	-DCMAKE_INSTALL_PREFIX="" \
+	-DLIBCXX_LIBDIR_SUFFIX=/$(TARGET_TRIPLE) \
+	-DLIBCXXABI_LIBDIR_SUFFIX=/$(TARGET_TRIPLE) \
+	-DCMAKE_C_COMPILER_TARGET=wasm32-wasi \
+	-DCMAKE_CXX_COMPILER_TARGET=wasm32-wasi \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
+	-DLIBCXX_ENABLE_THREADS:BOOL=OFF \
+	-DLIBCXX_HAS_EXTERNAL_THREAD_API:BOOL=OFF \
+	-DLIBCXX_HAS_WIN32_THREAD_API:BOOL=OFF \
+	-DLLVM_COMPILER_CHECKED=ON \
+	-DLIBCXX_ENABLE_SHARED:BOOL=OFF \
+	-DLIBCXX_ENABLE_EXCEPTIONS:BOOL=OFF \
+	-DLIBCXX_ENABLE_FILESYSTEM:BOOL=ON \
+	-DLIBCXX_ENABLE_ABI_LINKER_SCRIPT:BOOL=OFF \
+	-DLIBCXX_CXX_ABI=libcxxabi \
+	-DLIBCXX_HAS_MUSL_LIBC:BOOL=OFF \
+	-DLIBCXX_ABI_VERSION=2 \
+	-DLIBCXXABI_ENABLE_EXCEPTIONS:BOOL=OFF \
+	-DLIBCXXABI_ENABLE_SHARED:BOOL=OFF \
+	-DLIBCXXABI_SILENT_TERMINATE:BOOL=ON \
+	-DLIBCXXABI_ENABLE_THREADS:BOOL=OFF \
+	-DLIBCXXABI_USE_LLVM_UNWINDER:BOOL=OFF \
+	-DLIBUNWIND_ENABLE_SHARED:BOOL=OFF \
+	-DLIBUNWIND_ENABLE_THREADS:BOOL=OFF \
+	-DLIBUNWIND_USE_COMPILER_RT:BOOL=ON \
+	-DLIBUNWIND_INCLUDE_TESTS:BOOL=OFF \
+	-DUNIX:BOOL=ON \
+	-DCMAKE_C_COMPILER_WORKS=TRUE \
+	-DCMAKE_CXX_COMPILER_WORKS=TRUE \
+	-DCMAKE_CXX_FLAGS="-fwaslr -fno-exceptions" \
+	-DCMAKE_C_FLAGS="-fwaslr -fno-exceptions" \
+	-DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
+	-DLIBCXX_INCLUDE_TESTS=OFF \
+	-DLIBCXX_INCLUDE_BENCHMARKS=OFF \
+	-DLLVM_PARALLEL_LINK_JOBS=2
+
+INSTALL_TARGETS := install-cxx install-cxxabi 
+
+.PHONY: clean build-libc install-libc build-libcxx install-libcxx build install
+
+all: install 
+
+build-libc:
+	@echo "Building libc..."
+	$(MAKE) -C $(WASI_LIBC) CC=$(CLANG) AR=$(LLVM_AR) NM=$(LLVM_NM)
+
+install-libc: build-libc
+	@echo "Installing wasi-libc to sysroot"
+	cp -r $(WASI_LIBC)/sysroot/lib $(SDK_ROOT)/share/wasi-sysroot/
+	cp -r $(WASI_LIBC)/sysroot/include $(SDK_ROOT)/share/wasi-sysroot/
+
+build-libcxx:
+	@echo "Building libc++..."
+	cmake $(LIBCXX_CMAKE_FLAGS)
+	# if we don't provide cxx, it will build the latest experimental version 
+	ninja -C $(LIBCXX_BUILD_DIR) cxx
+
+install-libcxx: build-libcxx
+	@echo "Installing libc++..."
+	DESTDIR=$(LIBCXX_INSTALL_DIR) ninja -C $(LIBCXX_BUILD_DIR) $(INSTALL_TARGETS)
+
+build: build-libc build-libcxx 
+
+install: install-libc install-libcxx 
+
+clean:
+	rm -rf $(LIBC_BUILD_DIR) $(LIBCXX_BUILD_DIR)

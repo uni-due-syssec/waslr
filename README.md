@@ -2,36 +2,40 @@
 
 ## Setup
 
-### 1. Build LLVM
-In `waslr-llvm/`, run `build.sh`.
-Afterwards, run `ninja` in the `waslr-llvm/build/` directory.
+Run `make` in the root of this project to build a toolchain, standard libraries, and compiler-rt in `waslr-sdk/`
 
-`clang` and other binaries will be located in `waslr-llvm/build/bin/`.
-
-### 2. Add builtins
-We only need the compiler builtins, which we provide a prebuilt version of in `support/`.
-To make the builtins available to the newly built toolchain, copy `support/libclang_rt.builtins-wasm32-waslr.a` into `build/lib/clang/20/lib/wasi/libclang_rt.builtins-wasm32.a` (make sure to rename the file)
-
-#### Optional: Build Compiler Runtime Libraries
-If you want to build the builtins and other compiler runtime libraries yourself, run `build-compiler-rt.sh`.
-Afterwards, run `ninja` in the `waslr-llvm/build-compiler-rt` directory.
-
-Finally, copy `build-compiler-rt/lib/linux/libclang_rt.builtins-wasm32.a` into `build/lib/clang/20/lib/wasi/`.
-
-### 3. Build wasi libc 
-In `support/wasi-libc/`, run `build.sh`.
-
-A sysroot will be generated in `support/wasi-libc/sysroot/`.
- 
 ## Usage
 
-- clang location: `waslr-llvm/build/bin/clang`
-- Set the target: `--target=wasm32-wasi`
-- Set the sysroot: `--sysroot=path/to/support/wasi-libc/sysroot`
-- Compiler flags: `-fwaslr -fno-builtin-calloc -fno-builtin-malloc -fno-builtin-realloc -fno-builtin-free`
-- Linker flag: `-Wl,--waslr`
-- Compile & Link `support/waslr.c`
-    - To ensure it overrides the default allocator symbols, it should be placed early/first in the link order
+The toolchain's binaries are provided in `waslr-sdk/bin/`.
 
-## Host requirements
+### Required Compiler Flags
+- `--target=wasm32-wasi`
+- `--sysroot=<...>/waslr-sdk/share/wasi-sysroot`
+- `-fwaslr`
+
+It is also advised to disable default allocator builtins: `-fno-builtin-calloc -fno-builtin-malloc -fno-builtin-realloc -fno-builtin-free`
+
+### Required Linker Flags
+- `-Wl,--waslr`
+
+### Linking the WASLR Runtime 
+Compile & link the allocator/runtime from: `waslr-sdk/share/waslr-rt/` 
+
+Important: To ensure the runtime overrides default allocator symbols, it should be placed early/first in the linker order.
+
+### WASM Host Requirements
 The host has to provide a seed for the RNG through the imported global `__waslr_seed`
+
+## Changing the Allocator Chunk Size
+To adjust the allocator's chunk size, edit `waslr-sdk/share/waslr-rt/waslr.c`:
+1) Set the chunk size
+- Update `CHUNK_SIZE_LOG2` to the base-2 logarithm of the desired chunk size (e.g., 8 for 256 byte chunks)
+- For example, for 256-byte chunks:
+`#define CHUNK_SIZE_LOG2 8`
+2) Update the small object size classes
+- Modify `FOR_EACH_SMALL_OBJECT_GRANULES(M)` to include all power-of-two sizes up to and including `CHUNK_SIZE / 8` (8 = Granule size).
+- Example for 256-byte chunks:
+```
+    #define FOR_EACH_SMALL_OBJECT_GRANULES(M) \
+        M(1) M(2) M(4) M(8) M(16) M(32)
+```

@@ -2,7 +2,7 @@
 
 WASLR_ENABLED=1
 
-TARGET_DIR=../waslr-llvm/build/lib/clang/20/lib/wasi/
+TARGET_DIR=../waslr-sdk/lib/clang/20/lib/wasi
 
 mkdir -p "$TARGET_DIR"
 
