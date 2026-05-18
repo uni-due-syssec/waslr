@@ -162,6 +162,7 @@ struct Ctx {
 
     GlobalSymbol *wDataBase;
     GlobalSymbol *wSeed;
+    GlobalSymbol *wStackframes;
 
     // __tls_base
     // Global that holds the address of the base of the current thread's

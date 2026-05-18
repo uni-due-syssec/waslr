@@ -1,14 +1,19 @@
 #include "waslr.h"
 
+// how much memory our stackframe area should get
+#define ALLOC_STACKFRAMES_SIZE 4096
+
 #define SO_FREELIST_START 76000
 #define NUM_KINDS 16
-#define LIST_SIZE (NUM_KINDS * sizeof(struct freelist *)) 
+#define FREELIST_SIZE (NUM_KINDS * sizeof(struct freelist *)) 
 #define MAP_LOCATION_END (MAP_LOCATION_START + LIST_SIZE - 1)
 #define small_object_freelists ((struct freelist **)(SO_FREELIST_START))
 
 // functions with this attribute will use the original prologue/epilogue
 #define NO_WASLR __attribute__((waslr_no_rand))
 #define NO_INLINE __attribute__((noinline))
+#define WASM_GLOBAL __attribute__((address_space(1)))
+
 #define USED __attribute__((used))
 
 #define STATIC_ASSERT_EQ(a, b) _Static_assert((a) == (b), "eq")
@@ -96,17 +101,19 @@ enum chunk_kind {
   LARGE_OBJECT = 255
 };
 
-#define SEED_ADDR 75000 // freelists from 76000 onwards, allocator stackframes from 74000 downwards
+WASM_GLOBAL uint64_t __waslr_seed_internal;
+WASM_GLOBAL struct freelist ** __waslr_freelists;
+// mark as used to force retention until linking
+WASM_GLOBAL USED uint32_t __waslr_alloc_stackframes;
 
-void __srand(unsigned s) {
-  *(uint64_t*)SEED_ADDR = s-1;
+USED void __srand(unsigned s) {
+  __waslr_seed_internal = (uint64_t)s-1;
 }
 
-int __rand(void)
+USED int __rand(void)
 {
-  uint64_t seed = *(uint64_t*)SEED_ADDR;
-  seed = 6364136223846793005ULL*seed + 1;
-  *(uint64_t*)SEED_ADDR = seed;
+  uint64_t seed = 6364136223846793005ULL*(__waslr_seed_internal)+1;
+  __waslr_seed_internal = seed;
   return seed >> 33;
 }
 
@@ -244,25 +251,20 @@ NO_WASLR static size_t allocate_pages(size_t payload_size) {
   return pages_to_alloc;
 }
 
-NO_WASLR static void fisher_yates_shuffle(size_t *array, size_t size) {
-  if (size==1) return;
-  for (size_t i = size - 1; i > 0; i--) {
-    size_t j = __rand() % (i + 1);
-    size_t temp = array[i];
-    array[i] = array[j];
-    array[j] = temp;
-  }
-}
-
 // Important: Either export or mark as used to force retention of the symbol until linking
 NO_WASLR USED void __waslr_init(unsigned int seed) {
   grow_wasm_memory(INITIAL_PAGES_ALLOC);
+  // Must seed before first allocation!
   __srand(seed);
+  // this malloc call uses the hardcoded start value of 75000 for the allocator stack frames. Every subsequent call will use the newly allocated area
+  __waslr_alloc_stackframes = (uintptr_t)malloc(ALLOC_STACKFRAMES_SIZE);
+  // ensure this is a large object allocation so it does NOT use the freelist
+  __waslr_freelists = (struct freelist WASM_GLOBAL **) malloc(max(CHUNK_SIZE*2, FREELIST_SIZE));
 }
 
 NO_WASLR static struct freelist** get_small_object_freelist(enum chunk_kind kind) {
   ASSERT(kind < SMALL_OBJECT_CHUNK_KINDS);
-  return &small_object_freelists[kind];
+  return (struct freelist**)&__waslr_freelists[kind];
 }
 
 // max return value is 65535 * HEADERPAGES_PER_GROUP and we also want to return negative values to indicate errors
@@ -462,7 +464,6 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
 
   return next;  
 }
-
 NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     struct freelist **loc = get_small_object_freelist(kind);
     if (!*loc) {

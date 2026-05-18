@@ -240,11 +240,20 @@ static void query(const MachineInstr &MI, bool &Read, bool &Write,
   }
 
   // Check for writes to __stack_pointer global.
-  if ((MI.getOpcode() == WebAssembly::GLOBAL_SET_I32 ||
+  /*if ((MI.getOpcode() == WebAssembly::GLOBAL_SET_I32 ||
        MI.getOpcode() == WebAssembly::GLOBAL_SET_I64) &&
       strcmp(MI.getOperand(0).getSymbolName(), "__stack_pointer") == 0)
-    StackPointer = true;
-
+    StackPointer = true;*/
+  if ((MI.getOpcode() == WebAssembly::GLOBAL_SET_I32 ||
+       MI.getOpcode() == WebAssembly::GLOBAL_SET_I64)) {
+          auto Op = MI.getOperand(0);
+          llvm::outs() << "STACKIFY Checking Global \n";
+          Op.dump();
+          llvm::outs() << "\n"; 
+          if (Op.isSymbol() && strcmp(MI.getOperand(0).getSymbolName(), "__stack_pointer") == 0) {
+            StackPointer = true;
+          }
+       }
   // Analyze calls.
   if (MI.isCall()) {
     queryCallee(MI, Read, Write, Effects, StackPointer);

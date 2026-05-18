@@ -31,6 +31,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 using namespace llvm;
 
@@ -579,6 +580,8 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
   // the first page remains untouched, the second is for manual allocations like these.
   // The memory that is used for regular allocation requests starts on page 3.
   // Maybe: could also randomize the exact start in a predefined area since we control the entire memory layout
+  
+  
   int64_t allocStackframeStart = 74000;
   
   // Instead of only using the BasePtr when required, we use always use it to store the previous Stack Pointer
@@ -594,10 +597,19 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
 
   // if function has Stack Frame, subtract size from __stack_pointer 
   if (StackSize) {
-    // set Stack Pointer to predefined region (we use 8000 and below, should be more than enough for the malloc/free stack frames)
+
+    const char *ES = "__waslr_alloc_stackframes";
+    auto *AllocSF = MF.createExternalSymbolName(ES);
+
+    Module &M = *MF.getFunction().getParent();
+    GlobalVariable *GV = M.getGlobalVariable("__waslr_alloc_stackframes");
+  
+
     Register SPTargetReg = MRI.createVirtualRegister(PtrRC);
-    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
-        .addImm(allocStackframeStart);
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcGlobGet(MF)), SPTargetReg)
+        .addGlobalAddress(GV);
+    //BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
+    //    .addImm(allocStackframeStart);
       
 	  // Create Register to hold the constant Stack Size
     Register OffsetReg = MRI.createVirtualRegister(PtrRC);

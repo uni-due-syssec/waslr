@@ -5019,6 +5019,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   // Lookup the entry, lazily creating it if necessary.
   llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
   unsigned TargetAS = getContext().getTargetAddressSpace(AddrSpace);
+  bool isWaslrGlobal = MangledName == "__waslr_seed_internal" || "__waslr_seed" || "__waslr_freelists";
   if (Entry) {
     if (WeakRefReferences.erase(Entry)) {
       if (D && !D->hasAttr<WeakAttr>())
@@ -5056,7 +5057,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     }
 
     // Make sure the result is of the correct type.
-    if (Entry->getType()->getAddressSpace() != TargetAS)
+    if (Entry->getType()->getAddressSpace() != TargetAS && !isWaslrGlobal)
       return llvm::ConstantExpr::getAddrSpaceCast(
           Entry, llvm::PointerType::get(Ty->getContext(), TargetAS));
 
@@ -5065,13 +5066,17 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     if (!IsForDefinition)
       return Entry;
   }
-
+  
   auto DAddrSpace = GetGlobalVarAddressSpace(D);
+  auto fAddrSpace = getContext().getTargetAddressSpace(DAddrSpace);
+  if (isWaslrGlobal) {
+    fAddrSpace = 1;
+  }
 
   auto *GV = new llvm::GlobalVariable(
       getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
       MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
-      getContext().getTargetAddressSpace(DAddrSpace));
+      fAddrSpace);
 
   // If we already created a global with the same mangled name (but different
   // type) before, take its name and remove it from its parent.
@@ -5201,7 +5206,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
       D ? D->getType().getAddressSpace()
         : (LangOpts.OpenCL ? LangAS::opencl_global : LangAS::Default);
   assert(getContext().getTargetAddressSpace(ExpectedAS) == TargetAS);
-  if (DAddrSpace != ExpectedAS) {
+  if (DAddrSpace != ExpectedAS && !isWaslrGlobal) {
     return getTargetCodeGenInfo().performAddrSpaceCast(
         *this, GV, DAddrSpace, ExpectedAS,
         llvm::PointerType::get(getLLVMContext(), TargetAS));

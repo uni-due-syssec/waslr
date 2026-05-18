@@ -224,11 +224,12 @@ MCSymbol *WebAssemblyAsmPrinter::getOrCreateWasmSymbol(StringRef Name) {
   // functions. It's OK to hardcode knowledge of specific symbols here; this
   // method is precisely there for fetching the signatures of known
   // Clang-provided symbols.
+  bool isWaslrGlobal = Name == "__wdata_base"; //|| Name == "__waslr_seed_internal" || Name == "__waslr_freelists";
   if (Name == "__stack_pointer" || Name == "__tls_base" ||
       Name == "__memory_base" || Name == "__table_base" ||
-      Name == "__tls_size" || Name == "__tls_align" || Name == "__wdata_base") {
+      Name == "__tls_size" || Name == "__tls_align" || isWaslrGlobal) {
     bool Mutable =
-        Name == "__stack_pointer" || Name == "__tls_base" || Name == "__wdata_base";
+        Name == "__stack_pointer" || Name == "__tls_base" || isWaslrGlobal;
     WasmSym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
     WasmSym->setGlobalType(wasm::WasmGlobalType{
         uint8_t(Subtarget.hasAddr64() ? wasm::WASM_TYPE_I64
@@ -316,7 +317,7 @@ void WebAssemblyAsmPrinter::emitDecls(const Module &M) {
   }
 
   if (TM.Options.EnableWASLR) {
-    auto *WasmSym = cast<MCSymbolWasm>(getOrCreateWasmSymbol("__wdata_base"));
+    auto *WData_Base = cast<MCSymbolWasm>(getOrCreateWasmSymbol("__wdata_base"));
     LLVM_DEBUG(dbgs() << "Create Symbol: __wdata_base \n");
   }
 

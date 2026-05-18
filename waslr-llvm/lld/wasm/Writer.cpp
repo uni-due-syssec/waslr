@@ -355,6 +355,15 @@ void Writer::layoutMemory() {
     log("mem: stack top   = " + Twine(memoryPtr));
   };
 
+  if (ctx.arg.waslr) {
+    // locate the __waslr_alloc_stackframes global and set its startVA
+    ctx.sym.wStackframes = dyn_cast_or_null<GlobalSymbol>(symtab->find("__waslr_alloc_stackframes"));
+    if (ctx.sym.wStackframes) {
+      DefinedGlobal *wStackframes = cast<DefinedGlobal>(ctx.sym.wStackframes);
+      wStackframes->global->setPointerValue(75000);
+    }
+  }
+
   if (ctx.arg.stackFirst) {
     placeStack();
     if (ctx.arg.globalBase) {
@@ -1347,7 +1356,6 @@ void Writer::createInitMemoryFunction() {
       // call __waslr_init
       const FunctionSymbol *waslr_init = nullptr;
       waslr_init = dyn_cast_or_null<FunctionSymbol>(symtab->find("__waslr_init"));
-    
       if (waslr_init && waslr_init->hasFunctionIndex()) {
         writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
         writeUleb128(os, ctx.sym.wSeed->getGlobalIndex(),"__waslr_seed");
