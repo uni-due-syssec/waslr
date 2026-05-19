@@ -601,6 +601,9 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
     const char *ES = "__waslr_alloc_stackframes";
     auto *AllocSF = MF.createExternalSymbolName(ES);
 
+    // Note: this works since this prologue is only generated for functions in the waslr runtime, where the global is also defined
+    // If the Prologue would be generated for functions in other files, this would probably break
+    // But in our case that will never happen.
     Module &M = *MF.getFunction().getParent();
     GlobalVariable *GV = M.getGlobalVariable("__waslr_alloc_stackframes");
   

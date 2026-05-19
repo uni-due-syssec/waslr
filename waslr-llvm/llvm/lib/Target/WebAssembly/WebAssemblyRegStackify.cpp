@@ -247,10 +247,7 @@ static void query(const MachineInstr &MI, bool &Read, bool &Write,
   if ((MI.getOpcode() == WebAssembly::GLOBAL_SET_I32 ||
        MI.getOpcode() == WebAssembly::GLOBAL_SET_I64)) {
           auto Op = MI.getOperand(0);
-          llvm::outs() << "STACKIFY Checking Global \n";
-          Op.dump();
-          llvm::outs() << "\n"; 
-          if (Op.isSymbol() && strcmp(MI.getOperand(0).getSymbolName(), "__stack_pointer") == 0) {
+          if (Op.isSymbol() && strcmp(Op.getSymbolName(), "__stack_pointer") == 0) {
             StackPointer = true;
           }
        }

@@ -1609,8 +1609,6 @@ SDValue WebAssemblyTargetLowering::LowerOperation(SDValue Op,
     return SDValue();
   case ISD::RETURNADDR:
     return LowerRETURNADDR(Op, DAG);
-  case ISD::ADDRSPACECAST:
-    return LowerADDRSPACECAST(Op, DAG);
   case ISD::FRAMEADDR:
     return LowerFRAMEADDR(Op, DAG);
   case ISD::CopyToReg:
@@ -1682,12 +1680,6 @@ SDValue WebAssemblyTargetLowering::LowerStore(SDValue Op,
   const SDValue &Offset = SN->getOffset();
 
   if (IsWebAssemblyGlobal(Base)) {
-
-    if (auto *GA = dyn_cast<GlobalAddressSDNode>(Base.getNode())) {
-      llvm::outs () << "STORE WASM Global: " << GA->getGlobal()->getName() << "\n";
-      Op.dump();
-      llvm::outs() << "\n";
-    }
     if (!Offset->isUndef())
       report_fatal_error("unexpected offset when storing to webassembly global",
                          false);
@@ -1698,9 +1690,6 @@ SDValue WebAssemblyTargetLowering::LowerStore(SDValue Op,
                                    SN->getMemoryVT(), SN->getMemOperand());
   }
 
-  if (auto *GA = dyn_cast<GlobalAddressSDNode>(Base.getNode())) {
-    llvm::outs () << "STORE NORMAL Global: " << GA->getGlobal()->getName() << "\n";
-  }
   if (std::optional<unsigned> Local = IsWebAssemblyLocal(Base, DAG)) {
     if (!Offset->isUndef())
       report_fatal_error("unexpected offset when storing to webassembly local",
@@ -1728,11 +1717,6 @@ SDValue WebAssemblyTargetLowering::LowerLoad(SDValue Op,
   const SDValue &Offset = LN->getOffset();
                                      
   if (IsWebAssemblyGlobal(Base)) {
-    if (auto *GA = dyn_cast<GlobalAddressSDNode>(Base.getNode())) {
-      llvm::outs () << "LOAD WASM Global: " << GA->getGlobal()->getName() << "\n";
-      Op.dump();
-      llvm::outs() << "\n";
-    }
     if (!Offset->isUndef())
       report_fatal_error(
           "unexpected offset when loading from webassembly global", false);
@@ -1741,10 +1725,6 @@ SDValue WebAssemblyTargetLowering::LowerLoad(SDValue Op,
     SDValue Ops[] = {LN->getChain(), Base};
     return DAG.getMemIntrinsicNode(WebAssemblyISD::GLOBAL_GET, DL, Tys, Ops,
                                    LN->getMemoryVT(), LN->getMemOperand());
-  }
-
-  if (auto *GA = dyn_cast<GlobalAddressSDNode>(Base.getNode())) {
-    llvm::outs () << "LOAD NORMAL Global: " << GA->getGlobal()->getName() << "\n";
   }
 
   if (std::optional<unsigned> Local = IsWebAssemblyLocal(Base, DAG)) {
@@ -1855,19 +1835,6 @@ SDValue WebAssemblyTargetLowering::LowerFrameIndex(SDValue Op,
                                                    SelectionDAG &DAG) const {
   int FI = cast<FrameIndexSDNode>(Op)->getIndex();
   return DAG.getTargetFrameIndex(FI, Op.getValueType());
-}
-
-SDValue WebAssemblyTargetLowering::LowerADDRSPACECAST(SDValue Op, SelectionDAG &DAG) const {
-  SDLoc DL(Op);
-
-  auto *N = cast<AddrSpaceCastSDNode>(Op);
-
-  unsigned SrcAS = N->getSrcAddressSpace();
-  unsigned DstAS = N->getDestAddressSpace();
-  Op.dump();
-  Op.getOperand(0).dump();
-  llvm::outs() << "\n";
-  return Op.getOperand(0);
 }
 
 SDValue WebAssemblyTargetLowering::LowerRETURNADDR(SDValue Op,
@@ -2010,12 +1977,10 @@ SDValue WebAssemblyTargetLowering::LowerGlobalAddress(SDValue Op,
   // - defined in WebAssemblyInstrInfo.td
   if (waslrEnabled) {
     if (!WebAssembly::isWebAssemblyTableType(GV->getValueType())){
-      llvm::outs() << "LOWERGLOBAL: " << GV->getName() << "\n";
       //if (auto *GVar = dyn_cast<GlobalVariable>(GV)) {
         //if (!GVar->isDeclaration()) {
         //if (GVar->hasInitializer() && GVar->isConstant()) {
           if (IsWebAssemblyGlobal(Op)) {
-            llvm::outs() << "WEB ASSEMBLY GLOBAL LOWERING!" << GV->getName() << "\n";
             return DAG.getNode(WebAssemblyISD::Wrapper2, DL, VT,
                      DAG.getTargetGlobalAddress(GA->getGlobal(), DL, VT,
                                                 GA->getOffset(), OperandFlags));

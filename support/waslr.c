@@ -1,19 +1,15 @@
 #include "waslr.h"
 
-// how much memory our stackframe area should get
+// how much memory the allocator stackframe area should get
 #define ALLOC_STACKFRAMES_SIZE 4096
 
-#define SO_FREELIST_START 76000
-#define NUM_KINDS 16
-#define FREELIST_SIZE (NUM_KINDS * sizeof(struct freelist *)) 
-#define MAP_LOCATION_END (MAP_LOCATION_START + LIST_SIZE - 1)
-#define small_object_freelists ((struct freelist **)(SO_FREELIST_START))
+#define FREELIST_NUM_KINDS 16
+#define FREELIST_SIZE (FREELIST_NUM_KINDS * sizeof(struct freelist *)) 
 
 // functions with this attribute will use the original prologue/epilogue
 #define NO_WASLR __attribute__((waslr_no_rand))
 #define NO_INLINE __attribute__((noinline))
 #define WASM_GLOBAL __attribute__((address_space(1)))
-
 #define USED __attribute__((used))
 
 #define STATIC_ASSERT_EQ(a, b) _Static_assert((a) == (b), "eq")
@@ -103,14 +99,13 @@ enum chunk_kind {
 
 WASM_GLOBAL uint64_t __waslr_seed_internal;
 WASM_GLOBAL struct freelist ** __waslr_freelists;
-// mark as used to force retention until linking
-WASM_GLOBAL USED uint32_t __waslr_alloc_stackframes;
+WASM_GLOBAL uintptr_t __waslr_alloc_stackframes;
 
-USED void __srand(unsigned s) {
+void __srand(unsigned s) {
   __waslr_seed_internal = (uint64_t)s-1;
 }
 
-USED int __rand(void)
+int __rand(void)
 {
   uint64_t seed = 6364136223846793005ULL*(__waslr_seed_internal)+1;
   __waslr_seed_internal = seed;
@@ -464,6 +459,7 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
 
   return next;  
 }
+
 NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     struct freelist **loc = get_small_object_freelist(kind);
     if (!*loc) {

@@ -5057,7 +5057,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
     }
 
     // Make sure the result is of the correct type.
-    if (Entry->getType()->getAddressSpace() != TargetAS && !isWaslrGlobal)
+    if (Entry->getType()->getAddressSpace() != TargetAS)
       return llvm::ConstantExpr::getAddrSpaceCast(
           Entry, llvm::PointerType::get(Ty->getContext(), TargetAS));
 
@@ -5068,15 +5068,11 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   }
   
   auto DAddrSpace = GetGlobalVarAddressSpace(D);
-  auto fAddrSpace = getContext().getTargetAddressSpace(DAddrSpace);
-  if (isWaslrGlobal) {
-    fAddrSpace = 1;
-  }
 
   auto *GV = new llvm::GlobalVariable(
       getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
       MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
-      fAddrSpace);
+      getContext().getTargetAddressSpace(DAddrSpace));
 
   // If we already created a global with the same mangled name (but different
   // type) before, take its name and remove it from its parent.
@@ -5206,7 +5202,7 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
       D ? D->getType().getAddressSpace()
         : (LangOpts.OpenCL ? LangAS::opencl_global : LangAS::Default);
   assert(getContext().getTargetAddressSpace(ExpectedAS) == TargetAS);
-  if (DAddrSpace != ExpectedAS && !isWaslrGlobal) {
+  if (DAddrSpace != ExpectedAS) {
     return getTargetCodeGenInfo().performAddrSpaceCast(
         *this, GV, DAddrSpace, ExpectedAS,
         llvm::PointerType::get(getLLVMContext(), TargetAS));
