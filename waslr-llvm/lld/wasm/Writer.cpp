@@ -759,7 +759,7 @@ static bool shouldImport(Symbol *sym) {
   if (ctx.isPic || ctx.arg.relocatable || ctx.arg.importUndefined ||
       ctx.arg.unresolvedSymbols == UnresolvedPolicy::ImportDynamic)
     return true;
-  if (ctx.arg.allowUndefinedSymbols.count(sym->getName()) != 0)
+  if (ctx.arg.allowUndefinedSymbols.count(sym->getName()) != 0 || sym->isWaslr())
     return true;
 
   return sym->isImported();
@@ -1357,8 +1357,8 @@ void Writer::createInitMemoryFunction() {
       const FunctionSymbol *waslr_init = nullptr;
       waslr_init = dyn_cast_or_null<FunctionSymbol>(symtab->find("__waslr_init"));
       if (waslr_init && waslr_init->hasFunctionIndex()) {
-        writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
-        writeUleb128(os, ctx.sym.wSeed->getGlobalIndex(),"__waslr_seed");
+        //writeU8(os, WASM_OPCODE_GLOBAL_GET, "GLOBAL_GET");
+        //writeUleb128(os, ctx.sym.wSeed->getGlobalIndex(),"__waslr_seed");
         writeU8(os, WASM_OPCODE_CALL, "CALL");
         writeUleb128(os, waslr_init->getFunctionIndex(), "function index");
       }

@@ -53,6 +53,12 @@ static cl::opt<bool> WasmDisableFixIrreducibleControlFlowPass(
              " irreducible control flow optimization pass"),
     cl::init(false));
 
+// option for llc for better debugging of IR lowering
+static cl::opt<bool> WaslrOpt(
+    "waslr",
+    cl::desc("Enable WASLR"),
+    cl::init(false));
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeWebAssemblyTarget() {
   // Register the target.
   RegisterTargetMachine<WebAssemblyTargetMachine> X(
@@ -138,6 +144,7 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
   // necessary.
   this->Options.TrapUnreachable = true;
   this->Options.NoTrapAfterNoreturn = false;
+  this->Options.EnableWASLR = WaslrOpt || Options.EnableWASLR;
 
   // WebAssembly treats each function as an independent unit. Force
   // -ffunction-sections, effectively, so that we can emit them independently.

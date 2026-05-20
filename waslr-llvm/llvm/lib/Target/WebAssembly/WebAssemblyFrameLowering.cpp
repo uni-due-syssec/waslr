@@ -577,13 +577,6 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
   auto StackSize = Ctx.SFSize;
   auto DL = Ctx.DL;
 
-  // the first page remains untouched, the second is for manual allocations like these.
-  // The memory that is used for regular allocation requests starts on page 3.
-  // Maybe: could also randomize the exact start in a predefined area since we control the entire memory layout
-  
-  
-  int64_t allocStackframeStart = 74000;
-  
   // Instead of only using the BasePtr when required, we use always use it to store the previous Stack Pointer
   // Advantage: We can access the same Register in the Epilogue without further effort
   // Otherwise: Modify WebAssemblyMachineFunctionInfo and add a new field to store "our" Base Pointer
@@ -595,18 +588,13 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
   BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), BasePtr)
       .addReg(SPReg);
 
+  Module &M = *MF.getFunction().getParent();
+  GlobalVariable *GV = M.getGlobalVariable("__waslr_alloc_stackframes");
   // if function has Stack Frame, subtract size from __stack_pointer 
   if (StackSize) {
-
-    const char *ES = "__waslr_alloc_stackframes";
-    auto *AllocSF = MF.createExternalSymbolName(ES);
-
     // Note: this works since this prologue is only generated for functions in the waslr runtime, where the global is also defined
     // If the Prologue would be generated for functions in other files, this would probably break
     // But in our case that will never happen.
-    Module &M = *MF.getFunction().getParent();
-    GlobalVariable *GV = M.getGlobalVariable("__waslr_alloc_stackframes");
-  
 
     Register SPTargetReg = MRI.createVirtualRegister(PtrRC);
     BuildMI(MBB, InsertPt, DL, TII->get(getOpcGlobGet(MF)), SPTargetReg)
@@ -625,8 +613,10 @@ void WebAssemblyFrameLowering::emitAllocPrologue(MachineFunction &MF, MachineBas
         .addReg(OffsetReg);
   } else {
     Register SPTargetReg = MRI.createVirtualRegister(PtrRC);
-    BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
-        .addImm(allocStackframeStart);
+    BuildMI(MBB, InsertPt, DL, TII->get(getOpcGlobGet(MF)), SPTargetReg)
+        .addGlobalAddress(GV);
+    //BuildMI(MBB, InsertPt, DL, TII->get(getOpcConst(MF)), SPTargetReg)
+    //    .addImm(allocStackframeStart);
     BuildMI(MBB, InsertPt, DL, TII->get(WebAssembly::COPY), getSPReg(MF)).addReg(SPTargetReg);
     //FI->setSFPointerVreg(SPTargetReg);
   }

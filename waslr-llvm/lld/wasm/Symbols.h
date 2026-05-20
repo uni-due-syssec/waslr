@@ -76,6 +76,7 @@ public:
   }
 
   bool isLazy() const { return symbolKind == LazyKind; }
+  bool isWaslr() const { return getName().starts_with("__waslr"); }
   bool isShared() const {
     return symbolKind == SharedFunctionKind || symbolKind == SharedDataKind;
   }

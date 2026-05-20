@@ -81,12 +81,6 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
   // Compute derived properties from the register classes.
   computeRegisterProperties(Subtarget->getRegisterInfo());
 
-    // Handle address space casts between mixed sized pointers.
-  setOperationAction(ISD::ADDRSPACECAST, MVT::i32, Custom);
-  setOperationAction(ISD::ADDRSPACECAST, MVT::i64, Custom);
-  setOperationAction(ISD::ADDRSPACECAST, MVT::Other, Custom);
-
-
   // Transform loads and stores to pointers in address space 1 to loads and
   // stores to WebAssembly global variables, outside linear memory.
   for (auto T : {MVT::i32, MVT::i64, MVT::f32, MVT::f64}) {

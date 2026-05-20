@@ -161,7 +161,6 @@ struct Ctx {
     DefinedData *stackHigh;
 
     GlobalSymbol *wDataBase;
-    GlobalSymbol *wSeed;
     GlobalSymbol *wStackframes;
 
     // __tls_base

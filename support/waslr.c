@@ -9,8 +9,10 @@
 // functions with this attribute will use the original prologue/epilogue
 #define NO_WASLR __attribute__((waslr_no_rand))
 #define NO_INLINE __attribute__((noinline))
+#define WASM_EXPORT(name) __attribute__((export_name(#name))) name
 #define WASM_GLOBAL __attribute__((address_space(1)))
 #define USED __attribute__((used))
+#define WASM_IMPORT_GLOBAL extern WASM_GLOBAL
 
 #define STATIC_ASSERT_EQ(a, b) _Static_assert((a) == (b), "eq")
 #define STATIC_ASSERT_GE(a, b) _Static_assert((a) >= (b), "a must be >= b")
@@ -22,15 +24,15 @@
 #endif
 #define ASSERT_EQ(a,b) ASSERT((a) == (b))
 
-static size_t max(size_t a, size_t b) {
+static inline size_t max(size_t a, size_t b) {
   return a < b ? b : a;
 }
 
-static size_t min(size_t a, size_t b) {
+static inline size_t min(size_t a, size_t b) {
   return a < b ? a : b;
 }
 
-static uintptr_t align(uintptr_t val, uintptr_t alignment) {
+static inline uintptr_t align(uintptr_t val, uintptr_t alignment) {
   return (val + alignment - 1) & ~(alignment - 1);
 }
 #define ASSERT_ALIGNED(x, y) ASSERT((x) == align((x), y))
@@ -96,23 +98,47 @@ enum chunk_kind {
   LARGE_OBJECT_START = 254,
   LARGE_OBJECT = 255
 };
+// import
+extern WASM_GLOBAL uint64_t __waslr_seed;
 
 WASM_GLOBAL uint64_t __waslr_seed_internal;
 WASM_GLOBAL struct freelist ** __waslr_freelists;
 WASM_GLOBAL uintptr_t __waslr_alloc_stackframes;
 
-void __srand(unsigned s) {
-  __waslr_seed_internal = (uint64_t)s-1;
+#ifndef DISABLE_FREELIST_ENCODING
+// when enabled, define an additional import 
+extern WASM_GLOBAL uintptr_t __waslr_fl_secret;
+
+static struct freelist *enc(struct freelist *p) {
+    return p ? (struct freelist *)((uintptr_t)p ^ __waslr_fl_secret) : NULL;
 }
 
-int __rand(void)
+static struct freelist *dec(struct freelist *p) {
+    return p ? (struct freelist *)((uintptr_t)p ^ __waslr_fl_secret) : NULL;
+}
+
+#define FL_DECODE(ptr) dec(ptr)
+#define FL_ENCODE(ptr) enc(ptr)
+
+#else
+
+#define FL_DECODE(ptr) (ptr)
+#define FL_ENCODE(ptr) (ptr)
+
+#endif
+
+NO_WASLR static void __srand(uint64_t s) {
+  __waslr_seed_internal = s-1;
+}
+
+NO_WASLR static int __rand(void)
 {
   uint64_t seed = 6364136223846793005ULL*(__waslr_seed_internal)+1;
   __waslr_seed_internal = seed;
   return seed >> 33;
 }
 
-size_t rand_in_range(size_t min, size_t max) {
+NO_WASLR static size_t rand_in_range(size_t min, size_t max) {
     return min + (__rand() % (max - min + 1));
 }
 
@@ -175,7 +201,7 @@ struct search_result {
   ((uintptr_t)(ptr) < (__builtin_wasm_memory_size(0) * PAGE_SIZE))
 
 
-NO_WASLR size_t grow_wasm_memory(size_t numPages){
+NO_WASLR static size_t grow_wasm_memory(size_t numPages){
   int grow = __builtin_wasm_memory_grow(0, numPages);
   if (grow == -1) {
     return 0;
@@ -247,10 +273,10 @@ NO_WASLR static size_t allocate_pages(size_t payload_size) {
 }
 
 // Important: Either export or mark as used to force retention of the symbol until linking
-NO_WASLR USED void __waslr_init(unsigned int seed) {
+NO_WASLR USED void __waslr_init() {
   grow_wasm_memory(INITIAL_PAGES_ALLOC);
   // Must seed before first allocation!
-  __srand(seed);
+  __srand(__waslr_seed);
   // this malloc call uses the hardcoded start value of 75000 for the allocator stack frames. Every subsequent call will use the newly allocated area
   __waslr_alloc_stackframes = (uintptr_t)malloc(ALLOC_STACKFRAMES_SIZE);
   // ensure this is a large object allocation so it does NOT use the freelist
@@ -452,7 +478,7 @@ NO_WASLR static struct freelist* obtain_small_objects(enum chunk_kind kind) {
       size_t chunk_local_idx = indices[idx]; 
 
       struct freelist *head = (struct freelist*)(found_chunks[c] + (chunk_local_idx * size_slots));
-      head -> next = next;
+      head -> next = FL_ENCODE(next);
       next = head;
     }
   }
@@ -472,7 +498,7 @@ NO_WASLR static void* allocate_small(enum chunk_kind kind) {
     }
 
     struct freelist *ret = *loc;
-    *loc = ret->next;
+    *loc = FL_DECODE(ret->next);
 
     return (void *) ret;
 }
@@ -555,7 +581,7 @@ NO_WASLR NO_INLINE void WASM_EXPORT(free)(void *ptr) {
     struct freelist **loc = get_small_object_freelist(kind);
     struct freelist *obj = ptr;
 
-    obj->next = *loc;
+    obj->next = FL_ENCODE(*loc);
     *loc = obj;
   } 
 }

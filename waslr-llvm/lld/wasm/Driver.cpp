@@ -970,9 +970,7 @@ static void createSyntheticSymbols() {
     ctx.sym.stackPointer->markLive();
     if (ctx.arg.waslr) {
       ctx.sym.wDataBase = createGlobalVariable("__wdata_base", true);
-      ctx.sym.wSeed = createUndefinedGlobal("__waslr_seed", globalType);
       ctx.sym.wDataBase->markLive();
-      ctx.sym.wSeed->markLive();
     }
   }
 

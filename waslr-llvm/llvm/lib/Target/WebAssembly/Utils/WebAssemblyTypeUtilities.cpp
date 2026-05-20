@@ -93,7 +93,10 @@ void WebAssembly::wasmSymbolSetType(MCSymbolWasm *Sym, const Type *GlobalVT,
     Sym->setType(wasm::WASM_SYMBOL_TYPE_TABLE);
     Sym->setTableType(ValTy);
   } else {
+    // wasm global imports defined through C are seemingly mutable by default, even if declared as constant
+    // while its not a big issue, we prefer some custom globals to be read only
+    bool IsWaslrConstant = Sym->getName() == "__waslr_fl_secret" || Sym->getName() == "__waslr_seed";
     Sym->setType(wasm::WASM_SYMBOL_TYPE_GLOBAL);
-    Sym->setGlobalType(wasm::WasmGlobalType{uint8_t(ValTy), /*Mutable=*/true});
+    Sym->setGlobalType(wasm::WasmGlobalType{uint8_t(ValTy), /*Mutable=*/!IsWaslrConstant});
   }
 }

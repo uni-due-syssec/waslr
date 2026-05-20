@@ -38,6 +38,8 @@ static bool allowUndefined(const Symbol* sym) {
   // link time.
   if (sym->isImported())
     return true;
+  if (sym->isWaslr())
+    return true;
   if (isa<UndefinedFunction>(sym) && ctx.arg.importUndefined)
     return true;
 
@@ -45,6 +47,7 @@ static bool allowUndefined(const Symbol* sym) {
 }
 
 static void reportUndefined(ObjFile *file, Symbol *sym) {
+  // instead of requiring to link with --allow-undefined, we simply allow undefined symbols starting with "__waslr"
   if (!allowUndefined(sym)) {
     switch (ctx.arg.unresolvedSymbols) {
     case UnresolvedPolicy::ReportError:
