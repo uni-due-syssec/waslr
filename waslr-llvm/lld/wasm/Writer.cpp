@@ -1107,22 +1107,22 @@ void Writer::combineOutputSegments() {
     return;
   OutputSegment *combined = make<OutputSegment>(".data");
   combined->startVA = segments[0]->startVA;
+  OutputSegment *bss = nullptr;
   for (OutputSegment *s : segments) {
+    //llvm::outs() << "HANDLE SEGMENT: " << s->name << "\n";
+    // there SHOULD only be one output segment of each type at this point
+    if (s->isBss) {
+      //llvm::outs() << "FOUND BSS\n";
+      bss = s;
+      continue;
+    }
+
     bool first = true;
     for (InputChunk *inSeg : s->inputSegments) {
       if (first)
         inSeg->alignment = std::max(inSeg->alignment, s->alignment);
       first = false;
-#ifndef NDEBUG
-      uint64_t oldVA = inSeg->getVAold();
-#endif
       combined->addInputSegment(inSeg);
-#ifndef NDEBUG
-      uint64_t newVA = inSeg->getVAold();
-      LLVM_DEBUG(dbgs() << "added input segment. name=" << inSeg->name
-                        << " oldVA=" << oldVA << " newVA=" << newVA << "\n");
-      assert(oldVA == newVA);
-#endif
     }
   }
   if (ctx.arg.waslr) {
@@ -1130,6 +1130,14 @@ void Writer::combineOutputSegments() {
   }
 
   segments = {combined};
+
+  if (bss != nullptr) {
+    // Ensure that bss elements are still using the correct offset as if they were part of the combined segment
+    for (InputChunk *inSeg : bss->inputSegments) {
+      inSeg->outputSegmentOffset = combined->size + inSeg->outputSegmentOffset;
+    }
+    segments.push_back(bss);
+  }
 }
 
 static void createFunction(DefinedFunction *func, StringRef bodyContent) {
