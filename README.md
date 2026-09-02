@@ -1,4 +1,7 @@
-# WASLR
+# Waslr — Per Instantiation Randomization for Wasm
+
+Artifact for the RAID 2026 paper *"Waslr: Fine-Grained Memory Randomization for WebAssembly"*.
+
 
 ## Setup
 
